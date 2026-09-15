@@ -1,0 +1,209 @@
+#!/bin/bash
+# =============================================================================
+# DriveGuard — bootstrap da EC2 do dashboard (Amazon Linux 2023)
+#
+# 1. instala Node.js 20, git e nginx
+# 2. busca a URI do banco no SSM Parameter Store
+# 3. clona e builda o dashboard (TanStack Start / Vite)
+# 4. sobe o app como serviço systemd na porta 3000
+# 5. nginx faz proxy reverso da porta 80 para a 3000
+#
+# Se o clone do repositório falhar (repo privado, sem credencial na instância),
+# a instância sobe assim mesmo servindo uma página de status com os dados da
+# infraestrutura — assim dá para validar rede, SG e conectividade com o RDS
+# antes de resolver o acesso ao código.
+# =============================================================================
+set -uo pipefail
+
+exec > >(tee /var/log/driveguard-bootstrap.log) 2>&1
+echo "[driveguard] bootstrap iniciado em $(date -Is)"
+
+PROJETO="${project_name}"
+AMBIENTE="${environment}"
+REGIAO="${region}"
+SSM_URI_PARAM="${ssm_uri_parameter}"
+REPO_URL="${repo_url}"
+REPO_SUBDIR="${repo_subdir}"
+APP_PORT="${app_port}"
+APP_DIR="/opt/driveguard"
+
+# ----------------------------------------------------------------- pacotes
+dnf update -y
+dnf install -y git nginx tar gzip jq postgresql16
+
+# Node.js 20 pelo repositório oficial da NodeSource.
+curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+dnf install -y nodejs
+echo "[driveguard] node $(node --version) / npm $(npm --version)"
+
+# ------------------------------------------------------------------ segredo
+mkdir -p /etc/driveguard
+chmod 750 /etc/driveguard
+
+DB_URI="$(aws ssm get-parameter \
+    --name "$SSM_URI_PARAM" \
+    --with-decryption \
+    --region "$REGIAO" \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null || echo '')"
+
+if [ -z "$DB_URI" ] || [ "$DB_URI" = "None" ]; then
+  echo "[driveguard] AVISO: nao foi possivel ler $SSM_URI_PARAM no SSM."
+else
+  echo "[driveguard] URI do banco obtida do SSM."
+fi
+
+cat > /etc/driveguard/dashboard.env <<ENVFILE
+NODE_ENV=production
+PORT=$APP_PORT
+HOST=0.0.0.0
+DATABASE_URL=$DB_URI
+PGSSLMODE=require
+AWS_REGION=$REGIAO
+DRIVEGUARD_ENV=$AMBIENTE
+ENVFILE
+
+chmod 640 /etc/driveguard/dashboard.env
+
+# -------------------------------------------------------------------- app
+mkdir -p "$APP_DIR"
+BUILD_OK=0
+
+if git clone --depth 1 "$REPO_URL" "$APP_DIR/src" 2>/dev/null; then
+  APP_PATH="$APP_DIR/src"
+  if [ -n "$REPO_SUBDIR" ] && [ -d "$APP_DIR/src/$REPO_SUBDIR" ]; then
+    APP_PATH="$APP_DIR/src/$REPO_SUBDIR"
+  fi
+
+  echo "[driveguard] buildando em $APP_PATH"
+  cd "$APP_PATH"
+
+  if npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund; then
+    if npm run build; then
+      BUILD_OK=1
+      echo "$APP_PATH" > /etc/driveguard/app_path
+      echo "[driveguard] build concluido."
+    else
+      echo "[driveguard] ERRO: npm run build falhou."
+    fi
+  else
+    echo "[driveguard] ERRO: instalacao de dependencias falhou."
+  fi
+else
+  echo "[driveguard] ERRO: git clone de $REPO_URL falhou (repo privado?)."
+fi
+
+# ---------------------------------------------------------------- systemd
+if [ "$BUILD_OK" = "1" ]; then
+  APP_PATH="$(cat /etc/driveguard/app_path)"
+
+  cat > /etc/systemd/system/driveguard-dashboard.service <<UNIT
+[Unit]
+Description=DriveGuard Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$APP_PATH
+EnvironmentFile=/etc/driveguard/dashboard.env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  systemctl daemon-reload
+  systemctl enable --now driveguard-dashboard.service
+fi
+
+# ------------------------------------------------------------------ nginx
+if [ "$BUILD_OK" = "1" ]; then
+  cat > /etc/nginx/conf.d/driveguard.conf <<NGINX
+server {
+    listen 80 default_server;
+    server_name _;
+
+    access_log /var/log/nginx/driveguard-access.log;
+    error_log  /var/log/nginx/driveguard-error.log;
+
+    location /healthz {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:$APP_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_read_timeout 60s;
+    }
+}
+NGINX
+else
+  # Página de status: confirma que rede, IAM e conectividade com o banco estão
+  # de pé, mesmo sem o código do dashboard.
+  mkdir -p /usr/share/nginx/html
+  DB_STATUS="nao verificado"
+  if [ -n "$DB_URI" ] && [ "$DB_URI" != "None" ]; then
+    if psql "$DB_URI" -c "SELECT 1" >/dev/null 2>&1; then
+      DB_STATUS="conectado"
+    else
+      DB_STATUS="inacessivel"
+    fi
+  fi
+
+  cat > /usr/share/nginx/html/index.html <<HTML
+<!doctype html>
+<meta charset="utf-8">
+<title>DriveGuard - $AMBIENTE</title>
+<style>
+  body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:4rem auto;padding:0 1.5rem;color:#14181f}
+  code{background:#f1f3f5;padding:.15em .4em;border-radius:4px}
+  .ok{color:#0a7d3f} .bad{color:#b4232c}
+</style>
+<h1>DriveGuard - infraestrutura no ar</h1>
+<p>A EC2 subiu, mas o build do dashboard nao foi concluido.</p>
+<ul>
+  <li>Projeto: <code>$PROJETO</code> / ambiente <code>$AMBIENTE</code></li>
+  <li>Regiao: <code>$REGIAO</code></li>
+  <li>Repositorio: <code>$REPO_URL</code></li>
+  <li>Banco de dados: <strong class="$([ "\$DB_STATUS" = "conectado" ] && echo ok || echo bad)">$DB_STATUS</strong></li>
+</ul>
+<p>Log do bootstrap: <code>/var/log/driveguard-bootstrap.log</code></p>
+HTML
+
+  cat > /etc/nginx/conf.d/driveguard.conf <<NGINX
+server {
+    listen 80 default_server;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location /healthz {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+}
+NGINX
+fi
+
+# O default server do pacote conflita com o nosso listen 80 default_server.
+sed -i 's/listen       80;/listen       8080;/; s/listen       \[::\]:80;/listen       [::]:8080;/' /etc/nginx/nginx.conf || true
+
+nginx -t && systemctl enable --now nginx && systemctl restart nginx
+
+echo "[driveguard] bootstrap concluido em $(date -Is) (build_ok=$BUILD_OK)"

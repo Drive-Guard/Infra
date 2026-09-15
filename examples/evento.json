@@ -1,0 +1,67 @@
+{
+  "device_id": "dg-edge-0001",
+  "schema_version": "1.0",
+  "motorista_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "veiculo_hash": "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752",
+  "tipo_veiculo": "caminhao",
+  "enviado_em": "2026-03-14T03:15:00Z",
+  "leituras": [
+    {
+      "registrado_em": "2026-03-14T03:00:00Z",
+      "ear": 0.3102,
+      "mar": 0.2184,
+      "perclos": 0.0812,
+      "blink_rate": 17.2,
+      "duracao_olhos_fechados_ms": 180,
+      "head_pitch": 0.4,
+      "head_yaw": 1.1,
+      "head_roll": -0.3,
+      "score_fadiga": 18.5,
+      "estado": "alerta",
+      "latitude": -23.55052,
+      "longitude": -46.633308,
+      "velocidade_kmh": 82.0
+    },
+    {
+      "registrado_em": "2026-03-14T03:05:00Z",
+      "ear": 0.2380,
+      "mar": 0.3791,
+      "perclos": 0.2765,
+      "blink_rate": 12.8,
+      "duracao_olhos_fechados_ms": 420,
+      "head_pitch": -8.2,
+      "head_yaw": 2.4,
+      "head_roll": 0.9,
+      "score_fadiga": 56.3,
+      "estado": "fadiga",
+      "latitude": -23.56104,
+      "longitude": -46.641902,
+      "velocidade_kmh": 79.5
+    },
+    {
+      "registrado_em": "2026-03-14T03:10:00Z",
+      "ear": 0.1594,
+      "mar": 0.5122,
+      "perclos": 0.5431,
+      "blink_rate": 7.9,
+      "duracao_olhos_fechados_ms": 910,
+      "head_pitch": -18.6,
+      "head_yaw": 3.8,
+      "head_roll": -1.7,
+      "score_fadiga": 88.1,
+      "estado": "sonolento",
+      "latitude": -23.57230,
+      "longitude": -46.650114,
+      "velocidade_kmh": 74.0
+    }
+  ],
+  "alertas": [
+    {
+      "disparado_em": "2026-03-14T03:10:02Z",
+      "tipo": "microssono",
+      "gravidade": "alta",
+      "score_fadiga": 88.1,
+      "mensagem": "PERCLOS 0.54 com pitch -18.6 graus apos 4h de conducao continua."
+    }
+  ]
+}

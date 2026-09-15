@@ -1,0 +1,1 @@
+# A Lambda de ingestao usa apenas boto3, ja incluso no runtime da AWS.
