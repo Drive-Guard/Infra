@@ -1,0 +1,131 @@
+###############################################################################
+# DriveGuard — exemplo de configuração
+#
+# Copie para terraform.tfvars e ajuste. terraform.tfvars está no .gitignore:
+# nunca versione o arquivo real.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+###############################################################################
+
+# ----------------------------------------------------------------------------
+# Identificação
+# ----------------------------------------------------------------------------
+
+project_name = "driveguard"
+environment  = "dev"
+aws_region   = "us-east-1"
+owner        = "TCC-DriveGuard-2026"
+
+extra_tags = {
+  Curso      = "Engenharia de Software"
+  Instituicao = "FIAP"
+  Turma      = "TCC-2026"
+}
+
+# ----------------------------------------------------------------------------
+# IAM
+#
+# learner_lab  -> usa a LabRole existente (obrigatório no AWS Academy)
+# self_managed -> Terraform cria as roles (conta AWS própria)
+# ----------------------------------------------------------------------------
+
+iam_mode = "learner_lab"
+
+# ----------------------------------------------------------------------------
+# Rede
+# ----------------------------------------------------------------------------
+
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.3.0/24"]
+private_subnet_cidrs = ["10.0.2.0/24", "10.0.4.0/24"]
+
+# NAT Gateway custa ~US$32/mês: um terço do budget do Learner Lab.
+# A arquitetura não precisa dele — as Lambdas privadas usam VPC Endpoints.
+enable_nat_gateway             = false
+enable_vpc_interface_endpoints = true
+
+# Coloque aqui o SEU IP público para liberar SSH e acesso direto ao banco:
+#   curl -s https://checkip.amazonaws.com
+# admin_cidrs = ["203.0.113.42/32"]
+admin_cidrs = []
+
+# Restrinja também o acesso ao dashboard se quiser expor só para a banca.
+dashboard_allowed_cidrs = ["0.0.0.0/0"]
+
+# ----------------------------------------------------------------------------
+# Banco de dados
+# ----------------------------------------------------------------------------
+
+db_engine_version        = "16.4"
+db_instance_class        = "db.t3.micro"
+db_allocated_storage     = 20
+db_max_allocated_storage = 50
+db_name                  = "driveguard"
+db_username              = "dgadmin"
+db_backup_retention_days = 1
+db_multi_az              = false
+db_deletion_protection   = false
+
+# true expõe o RDS com IP público (ainda protegido pelo Security Group).
+# Útil para abrir o banco no DBeaver durante o desenvolvimento.
+db_publicly_accessible = false
+
+run_migrations_on_apply = true
+seed_demo_data          = true
+
+# ----------------------------------------------------------------------------
+# API de ingestão
+# ----------------------------------------------------------------------------
+
+api_stage_name           = "v1"
+api_throttle_rate_limit  = 50
+api_throttle_burst_limit = 100
+api_quota_limit          = 1000000
+enable_apigw_access_logs = false
+
+# ----------------------------------------------------------------------------
+# ETL
+# ----------------------------------------------------------------------------
+
+etl_gold_schedule         = "rate(5 minutes)"
+lambda_runtime            = "python3.12"
+lambda_log_retention_days = 14
+
+# ----------------------------------------------------------------------------
+# Dashboard
+# ----------------------------------------------------------------------------
+
+enable_dashboard        = true
+dashboard_instance_type = "t3.small"
+
+# No Learner Lab o key pair padrão chama-se "vockey".
+dashboard_key_pair_name = "vockey"
+
+dashboard_repo_url    = "https://github.com/Drive-Guard/Site.git"
+dashboard_repo_subdir = "driveguard-codigo"
+
+# ----------------------------------------------------------------------------
+# Machine Learning
+#
+# ml.t3.medium cobra por hora enquanto estiver InService. Ligue só no dia do
+# treino e rode `terraform apply -var enable_sagemaker=false` depois.
+# ----------------------------------------------------------------------------
+
+enable_sagemaker        = false
+sagemaker_instance_type = "ml.t3.medium"
+
+# ----------------------------------------------------------------------------
+# Observabilidade
+# ----------------------------------------------------------------------------
+
+# Preencha para receber os alarmes por e-mail (exige confirmar a inscrição).
+alarm_email = ""
+
+enable_cloudwatch_dashboard = true
+
+# ----------------------------------------------------------------------------
+# Armazenamento
+# ----------------------------------------------------------------------------
+
+bronze_retention_days = 365
+force_destroy_buckets = true
