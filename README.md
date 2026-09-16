@@ -22,11 +22,12 @@ monitoramento.
 7. [Validando a esteira ponta a ponta](#7-validando-a-esteira-ponta-a-ponta)
 8. [Modelo de dados](#8-modelo-de-dados)
 9. [Custo](#9-custo)
-10. [Operação do dia a dia](#10-operação-do-dia-a-dia)
-11. [Segurança e LGPD](#11-segurança-e-lgpd)
-12. [Solução de problemas](#12-solução-de-problemas)
-13. [Destruindo o ambiente](#13-destruindo-o-ambiente)
-14. [Limitações conhecidas](#14-limitações-conhecidas)
+10. [Controle de custo: parar e religar](#10-controle-de-custo-parar-e-religar)
+11. [Operação do dia a dia](#11-operação-do-dia-a-dia)
+12. [Segurança e LGPD](#12-segurança-e-lgpd)
+13. [Solução de problemas](#13-solução-de-problemas)
+14. [Destruindo o ambiente](#14-destruindo-o-ambiente)
+15. [Limitações conhecidas](#15-limitações-conhecidas)
 
 ---
 
@@ -223,6 +224,47 @@ Assim, reprocessar o bucket inteiro de propósito é seguro.
 O Learner Lab **para as instâncias ao fim de cada sessão**. Sem EIP, o IP público
 mudaria a cada retomada e o link entregue à banca deixaria de funcionar.
 
+### 3.11 Buckets S3 criados via Cloud Control (`awscc`), não `aws_s3_bucket`
+
+Descoberto aplicando de verdade no Learner Lab. A Service Control Policy da
+conta **nega explicitamente `s3:GetBucketObjectLockConfiguration`**, e o recurso
+`aws_s3_bucket` chama essa API em **todo refresh**:
+
+```
+Error: reading S3 Bucket (...) object lock configuration:
+AccessDenied ... with an explicit deny in a service control policy
+```
+
+Não há como desligar essa leitura, e o comportamento é o mesmo no provider 5.x
+e no 6.x — ou seja, `aws_s3_bucket` é inutilizável nesta conta. O
+`awscc_s3_bucket` usa a Cloud Control API, que não faz essa chamada.
+
+Testando bucket a bucket, **só aquela chamada é negada**: versionamento,
+criptografia, lifecycle, policy, bloqueio público e notificação passam todas.
+Por isso a divisão ficou assim:
+
+| O quê | Provider | Recurso |
+|---|---|---|
+| Criar o bucket | `awscc` | `awscc_s3_bucket` |
+| Todo o resto da configuração | `aws` | `aws_s3_bucket_versioning`, `_server_side_encryption_configuration`, `_lifecycle_configuration`, `_public_access_block`, `_policy`, `_notification` |
+
+Efeito colateral: `awscc_s3_bucket` não tem `force_destroy`, e a Cloud Control
+recusa apagar bucket com objetos. Dois `null_resource` com provisioner de
+destroy esvaziam os buckets antes — como eles dependem do bucket, o Terraform
+os destrói primeiro, na ordem certa.
+
+### 3.12 O pacote das Lambdas preserva os `*.dist-info`
+
+Parece detalhe de empacotamento, mas derruba a função. O `scramp`, dependência
+do `pg8000`, chama `importlib.metadata.version()` **no próprio import**. Um
+build que limpa metadados para reduzir o zip produz:
+
+```
+Runtime.ImportModuleError: No package metadata was found for scramp
+```
+
+Os scripts de build removem só `__pycache__`.
+
 ---
 
 ## 4. Estrutura do repositório
@@ -360,6 +402,20 @@ terraform output -raw db_connection_uri
 ---
 
 ## 7. Validando a esteira ponta a ponta
+
+> Esta infraestrutura já foi aplicada de verdade num AWS Academy Learner Lab
+> (`us-east-1`, 92 recursos). O que foi confirmado rodando:
+>
+> | Etapa | Resultado |
+> |---|---|
+> | `terraform apply` | `Apply complete!` sem erro |
+> | Migração do schema | 4 scripts SQL aplicados, 0 erros, seed incluído |
+> | `GET /v1/health` | `{"status": "ok", "servico": "driveguard-ingest"}` |
+> | `POST /v1/eventos` | HTTP 202, 3 leituras e 1 alerta aceitos, gravados no Bronze |
+>
+> O DDL completo (12 tabelas Silver + 7 MATERIALIZED VIEWs) roda em PostgreSQL
+> real — não só no parser.
+
 
 ### 7.1 A API responde?
 
@@ -530,7 +586,87 @@ dois meses ligado direto. Como reduzir:
 
 ---
 
-## 10. Operação do dia a dia
+## 10. Controle de custo: parar e religar
+
+> **O vazamento silencioso desta arquitetura são os VPC Endpoints.**
+> Ao encerrar a sessão, o Learner Lab já para a EC2 e o RDS sozinho — mas
+> endpoint de interface **não tem estado "parado"**. Cada ENI cobra
+> ~US$0,01/h enquanto existir, o que dá **~US$15/mês drenando com o ambiente
+> inteiro desligado**. Só deletar resolve.
+
+### `make stop` — derruba o que cobra por hora, preserva os dados
+
+```bash
+make stop          # ou: ./scripts/stop.sh   |   ./scripts/stop.ps1
+```
+
+Na ordem: desabilita a regra do EventBridge (senão a Lambda Gold segue
+acordando de 5 em 5 min contra um banco parado), para a EC2, para o RDS e
+**remove os VPC Endpoints de interface**.
+
+Preserva banco, buckets e o build do dashboard. Volta em ~5 min.
+
+**Não zera o consumo.** Continuam cobrando:
+
+| Item | ~US$/mês |
+|---|---|
+| EBS da EC2 (20 GB gp3) | 1,60 |
+| Storage do RDS (20 GB gp3) | 2,30 |
+| Elastic IP | 3,60 |
+| **Resíduo total** | **~7,60** |
+
+O Elastic IP merece nota: desde fevereiro de 2024 a AWS cobra por **todo**
+endereço IPv4 público, e um EIP preso a uma instância **parada** também conta.
+Parar a EC2 não elimina esse custo — ele só some no `destroy`.
+
+> ⚠️ **O stop do RDS dura no máximo 7 dias.** Passado o prazo a AWS religa a
+> instância automaticamente. Se for ficar mais de uma semana sem mexer,
+> destrua em vez de parar.
+
+### `make start` — religa tudo
+
+```bash
+make start         # ou: ./scripts/start.sh  |   ./scripts/start.ps1
+```
+
+A ordem importa e o script respeita: religa o RDS e **espera** ficar
+`available` (o boot da EC2 lê o banco), recria os endpoints, liga a EC2 e
+reabilita o agendamento. Leva de 4 a 7 minutos, quase tudo esperando o RDS.
+
+Se a sessão do Learner Lab expirou desde o stop, atualize
+`~/.aws/credentials` antes de rodar.
+
+### `make nuke` — a única forma de zerar
+
+```bash
+make nuke          # terraform destroy -auto-approve
+```
+
+Apaga tudo, inclusive o banco. Voltar é `terraform apply` (~15 min, e o
+dashboard rebuilda do zero).
+
+### `make custos` — o que ainda está ligado
+
+```bash
+make custos
+```
+
+Lista EC2, RDS, VPC Endpoints de interface, NAT Gateways, IPs públicos e
+notebooks do SageMaker. Use antes de fechar o notebook para conferir que nada
+ficou para trás.
+
+### Qual usar
+
+| Situação | Comando |
+|---|---|
+| Fim de uma sessão de trabalho, volto amanhã | `make stop` |
+| Vou ficar uma semana ou mais sem mexer | `make nuke` |
+| TCC entregue | `make nuke` |
+| Não sei o que está ligado | `make custos` |
+
+---
+
+## 11. Operação do dia a dia
 
 Com `make` (Git Bash ou WSL):
 
@@ -570,7 +706,7 @@ scripts são idempotentes.
 
 ---
 
-## 11. Segurança e LGPD
+## 12. Segurança e LGPD
 
 O ponto de partida é **privacy by design**: o vídeo é processado e descartado no
 veículo. Nenhuma imagem facial trafega pela rede nem chega à AWS — só métricas
@@ -598,14 +734,18 @@ use o S3 com `encrypt = true` (veja `backend.tf.example`).
 
 ---
 
-## 12. Solução de problemas
+## 13. Solução de problemas
 
 | Sintoma | Causa | Solução |
 |---|---|---|
 | `ExpiredToken` / `InvalidClientTokenId` | Sessão do Learner Lab expirou | Copie as credenciais novas em **AWS Details → AWS CLI** |
+| `explicit deny in an identity-based policy: voc-cancel-cred` | A **sessão do lab foi encerrada** — o Academy anexa essa policy e bloqueia quase tudo | Reinicie o lab (**Start Lab**) e atualize as credenciais |
 | `AccessDenied` em `iam:CreateRole` | `iam_mode = "self_managed"` no Learner Lab | Volte para `iam_mode = "learner_lab"` |
 | `NoSuchEntity: LabRole` | Conta AWS própria, sem a role do Academy | Use `iam_mode = "self_managed"` |
 | `InvalidParameterValueException: ReservedConcurrentExecutions` | Cota de concorrência baixa na conta | `lambda_reserve_concurrency = false` |
+| `No package metadata was found for scramp` | O build removeu os `*.dist-info` | Refaça o build com os scripts atuais (ver 3.12) |
+| `reading S3 Bucket ... object lock configuration: AccessDenied` | Usou `aws_s3_bucket` numa conta com o SCP do Academy | Use `awscc_s3_bucket` (ver 3.11) |
+| `Cannot find version 16.4 for postgres` | A conta não oferece essa minor version | `aws rds describe-db-engine-versions --engine postgres` e ajuste `db_engine_version` |
 | `rds-ca-bundle.pem nao encontrado` | O build não rodou | `./scripts/build_lambdas.ps1` (ou `.sh`) |
 | Lambda de ETL dá timeout sem log | Sem NAT e sem VPC Endpoint de Logs | `enable_vpc_interface_endpoints = true` |
 | `db-migrate` falha ao conectar | ENI da Lambda ainda subindo | O handler já faz 6 tentativas com backoff; se persistir, `terraform apply` de novo |
@@ -624,7 +764,7 @@ aws logs tail /aws/lambda/driveguard-dev-etl-gold   --since 30m
 
 ---
 
-## 13. Destruindo o ambiente
+## 14. Destruindo o ambiente
 
 ```bash
 terraform destroy
@@ -634,13 +774,13 @@ Com os defaults (`force_destroy_buckets = true`, `skip_final_snapshot = true`,
 `db_deletion_protection = false`), o destroy remove tudo, inclusive buckets com
 objetos dentro. Leva cerca de 10 minutos, quase tudo apagando o RDS.
 
-> Se for **apresentar de novo depois**, não destrua: pare a EC2 e o RDS pelo
-> console. O Learner Lab já para as instâncias ao encerrar a sessão, e o `apply`
-> seguinte as religa sem recriar nada.
+> Se for **apresentar de novo depois**, não destrua: use `make stop`, que
+> preserva banco e dashboard e ainda remove os VPC Endpoints — o item que o
+> Learner Lab **não** desliga sozinho. Ver [seção 10](#10-controle-de-custo-parar-e-religar).
 
 ---
 
-## 14. Limitações conhecidas
+## 15. Limitações conhecidas
 
 Coisas que este repositório **não** faz, e por quê:
 

@@ -10,29 +10,51 @@
 #
 # Não há bucket "silver"/"gold": essas camadas vivem no RDS PostgreSQL
 # (schema silver + MATERIALIZED VIEWs mv_*).
+#
+# ---------------------------------------------------------------------------
+# POR QUE `awscc_s3_bucket` E NÃO `aws_s3_bucket`
+#
+# A Service Control Policy do AWS Academy Learner Lab nega explicitamente
+# `s3:GetBucketObjectLockConfiguration`. O recurso `aws_s3_bucket` chama essa
+# API em TODO refresh, então ele quebra o `plan` e o `apply` nesta conta:
+#
+#   Error: reading S3 Bucket (...) object lock configuration: ...
+#   AccessDenied ... with an explicit deny in a service control policy
+#
+# Não há como desligar essa leitura, e o problema persiste no provider 6.x.
+# O `awscc_s3_bucket` usa a Cloud Control API, que não faz essa chamada e
+# funciona normalmente aqui.
+#
+# A configuração continua toda declarativa no provider `aws`: versionamento,
+# criptografia, lifecycle, bloqueio de acesso público e policy são recursos
+# separados (`aws_s3_bucket_*`), e todas as APIs que eles usam são permitidas
+# pelo SCP. Só a criação do bucket muda de provider.
 ###############################################################################
 
 locals {
   bronze_bucket_name    = "${var.name_prefix}-bronze-${var.suffix}"
   artifacts_bucket_name = "${var.name_prefix}-artifacts-${var.suffix}"
+
+  # O provider awscc não tem `default_tags`, e espera uma lista de pares em
+  # vez de um mapa. As tags do projeto são convertidas aqui.
+  tags_awscc = [for k, v in var.tags : { key = k, value = v }]
 }
 
 # ----------------------------------------------------------------------------
 # Bucket Bronze
 # ----------------------------------------------------------------------------
 
-resource "aws_s3_bucket" "bronze" {
-  bucket        = local.bronze_bucket_name
-  force_destroy = var.force_destroy
+resource "awscc_s3_bucket" "bronze" {
+  bucket_name = local.bronze_bucket_name
 
-  tags = {
-    Name          = local.bronze_bucket_name
-    MedallionTier = "bronze"
-  }
+  tags = concat(local.tags_awscc, [
+    { key = "Name", value = local.bronze_bucket_name },
+    { key = "MedallionTier", value = "bronze" },
+  ])
 }
 
 resource "aws_s3_bucket_public_access_block" "bronze" {
-  bucket = aws_s3_bucket.bronze.id
+  bucket = awscc_s3_bucket.bronze.bucket_name
 
   block_public_acls       = true
   block_public_policy     = true
@@ -41,7 +63,7 @@ resource "aws_s3_bucket_public_access_block" "bronze" {
 }
 
 resource "aws_s3_bucket_versioning" "bronze" {
-  bucket = aws_s3_bucket.bronze.id
+  bucket = awscc_s3_bucket.bronze.bucket_name
 
   versioning_configuration {
     status = "Enabled"
@@ -49,7 +71,7 @@ resource "aws_s3_bucket_versioning" "bronze" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "bronze" {
-  bucket = aws_s3_bucket.bronze.id
+  bucket = awscc_s3_bucket.bronze.bucket_name
 
   rule {
     apply_server_side_encryption_by_default {
@@ -60,7 +82,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "bronze" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "bronze" {
-  bucket = aws_s3_bucket.bronze.id
+  bucket = awscc_s3_bucket.bronze.bucket_name
 
   # Eventos crus são lidos pelo ETL em minutos e depois quase nunca relidos:
   # migram para classes mais baratas rapidamente.
@@ -104,11 +126,13 @@ resource "aws_s3_bucket_lifecycle_configuration" "bronze" {
       days_after_initiation = 7
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.bronze]
 }
 
-# Impede qualquer escrita sem TLS.
+# Impede qualquer acesso sem TLS.
 resource "aws_s3_bucket_policy" "bronze" {
-  bucket = aws_s3_bucket.bronze.id
+  bucket = awscc_s3_bucket.bronze.bucket_name
   policy = data.aws_iam_policy_document.bronze.json
 
   depends_on = [aws_s3_bucket_public_access_block.bronze]
@@ -127,8 +151,8 @@ data "aws_iam_policy_document" "bronze" {
     actions = ["s3:*"]
 
     resources = [
-      aws_s3_bucket.bronze.arn,
-      "${aws_s3_bucket.bronze.arn}/*",
+      awscc_s3_bucket.bronze.arn,
+      "${awscc_s3_bucket.bronze.arn}/*",
     ]
 
     condition {
@@ -143,17 +167,16 @@ data "aws_iam_policy_document" "bronze" {
 # Bucket de artefatos
 # ----------------------------------------------------------------------------
 
-resource "aws_s3_bucket" "artifacts" {
-  bucket        = local.artifacts_bucket_name
-  force_destroy = var.force_destroy
+resource "awscc_s3_bucket" "artifacts" {
+  bucket_name = local.artifacts_bucket_name
 
-  tags = {
-    Name = local.artifacts_bucket_name
-  }
+  tags = concat(local.tags_awscc, [
+    { key = "Name", value = local.artifacts_bucket_name },
+  ])
 }
 
 resource "aws_s3_bucket_public_access_block" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
+  bucket = awscc_s3_bucket.artifacts.bucket_name
 
   block_public_acls       = true
   block_public_policy     = true
@@ -162,7 +185,7 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
 }
 
 resource "aws_s3_bucket_versioning" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
+  bucket = awscc_s3_bucket.artifacts.bucket_name
 
   versioning_configuration {
     status = "Enabled"
@@ -170,7 +193,7 @@ resource "aws_s3_bucket_versioning" "artifacts" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
+  bucket = awscc_s3_bucket.artifacts.bucket_name
 
   rule {
     apply_server_side_encryption_by_default {
@@ -181,7 +204,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
+  bucket = awscc_s3_bucket.artifacts.bucket_name
 
   rule {
     id     = "limpeza-de-versoes-antigas"
@@ -197,6 +220,47 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
       days_after_initiation = 7
     }
   }
+
+  depends_on = [aws_s3_bucket_versioning.artifacts]
+}
+
+# ----------------------------------------------------------------------------
+# Esvaziamento no destroy
+#
+# A Cloud Control API recusa apagar um bucket com objetos dentro, e o
+# `awscc_s3_bucket` não tem o equivalente ao `force_destroy` do recurso do
+# provider aws. Estes null_resource dependem dos buckets, então o Terraform os
+# destrói ANTES deles — esvaziando o bucket na hora certa.
+# ----------------------------------------------------------------------------
+
+resource "null_resource" "esvaziar_bronze" {
+  count = var.force_destroy ? 1 : 0
+
+  triggers = {
+    bucket = awscc_s3_bucket.bronze.bucket_name
+    region = var.region
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    command    = "aws s3 rm s3://${self.triggers.bucket} --recursive --region ${self.triggers.region}"
+    on_failure = continue
+  }
+}
+
+resource "null_resource" "esvaziar_artifacts" {
+  count = var.force_destroy ? 1 : 0
+
+  triggers = {
+    bucket = awscc_s3_bucket.artifacts.bucket_name
+    region = var.region
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    command    = "aws s3 rm s3://${self.triggers.bucket} --recursive --region ${self.triggers.region}"
+    on_failure = continue
+  }
 }
 
 # ----------------------------------------------------------------------------
@@ -207,7 +271,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 resource "aws_s3_object" "sql" {
   for_each = fileset(var.sql_dir, "*.sql")
 
-  bucket       = aws_s3_bucket.artifacts.id
+  bucket       = awscc_s3_bucket.artifacts.bucket_name
   key          = "sql/${each.value}"
   source       = "${var.sql_dir}/${each.value}"
   etag         = filemd5("${var.sql_dir}/${each.value}")

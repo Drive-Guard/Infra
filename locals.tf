@@ -37,7 +37,7 @@ data "aws_iam_instance_profile" "lab" {
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
   account_id  = data.aws_caller_identity.current.account_id
-  region      = data.aws_region.current.name
+  region      = data.aws_region.current.region
 
   # Duas AZs: o RDS exige um subnet group com no mínimo duas.
   azs = slice(data.aws_availability_zones.available.names, 0, 2)

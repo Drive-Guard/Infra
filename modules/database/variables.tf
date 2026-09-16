@@ -16,7 +16,7 @@ variable "security_group_id" {
 variable "engine_version" {
   description = "Versão do PostgreSQL."
   type        = string
-  default     = "16.4"
+  default     = "16.15"
 }
 
 variable "parameter_group_family" {

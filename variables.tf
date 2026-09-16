@@ -152,7 +152,7 @@ variable "dashboard_allowed_cidrs" {
 variable "db_engine_version" {
   description = "Versão do PostgreSQL no RDS."
   type        = string
-  default     = "16.4"
+  default     = "16.15"
 }
 
 variable "db_instance_class" {
