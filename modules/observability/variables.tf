@@ -46,9 +46,21 @@ variable "db_max_connections_alarm" {
 }
 
 variable "dashboard_instance_id" {
-  description = "ID da EC2 do dashboard. Vazio desabilita o alarme de status check."
+  description = "ID da EC2 do dashboard. Usado como dimensão do alarme de status check."
   type        = string
   default     = ""
+}
+
+variable "monitor_dashboard_instance" {
+  description = <<-EOT
+    Cria o alarme de status check da EC2 do dashboard.
+
+    É um booleano próprio, e não `dashboard_instance_id != ""`, porque o ID da
+    instância só é conhecido no apply: usá-lo em `count` faz o plan falhar com
+    "Invalid count argument".
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "api_name" {

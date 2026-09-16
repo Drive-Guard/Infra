@@ -89,8 +89,12 @@ foreach ($f in $Funcoes) {
         }
     }
 
-    # Bytecode e metadados de dist nao servem em runtime e so incham o zip.
-    Get-ChildItem -Path $destino -Recurse -Directory -Include "__pycache__", "*.dist-info", "*.egg-info" -ErrorAction SilentlyContinue |
+    # Bytecode nao serve em runtime e so incha o zip.
+    #
+    # Os diretorios *.dist-info FICAM: o scramp, dependencia do pg8000, chama
+    # importlib.metadata.version() no proprio import. Sem a metadata a Lambda
+    # morre com "No package metadata was found for scramp".
+    Get-ChildItem -Path $destino -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     $tamanho = [math]::Round((Get-ChildItem $destino -Recurse -File | Measure-Object Length -Sum).Sum / 1KB, 1)

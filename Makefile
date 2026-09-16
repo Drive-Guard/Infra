@@ -46,8 +46,41 @@ apply: build ## Aplica a infraestrutura (pede confirmação)
 apply-auto: build ## Aplica sem confirmação
 	$(TF) apply -auto-approve
 
-destroy: ## Destrói tudo
+destroy: ## Destrói tudo (pede confirmação)
 	$(TF) destroy
+
+nuke: ## Destrói tudo sem confirmação - unica forma de zerar o consumo
+	@echo "Isso APAGA o banco, os buckets e o dashboard. Ctrl+C em 5s para abortar."
+	@sleep 5
+	$(TF) destroy -auto-approve
+
+# -----------------------------------------------------------------------------
+# Controle de custo
+#
+# O Learner Lab ja para EC2 e RDS ao encerrar a sessao, mas NAO remove os VPC
+# Endpoints de interface: cada ENI cobra ~US$0,01/h enquanto existir, o que da
+# ~US$15/mes drenando sem ninguem usar. `make stop` fecha esse vazamento.
+# -----------------------------------------------------------------------------
+
+stop: ## Para EC2 + RDS, desliga o agendamento e remove os VPC Endpoints
+	./scripts/stop.sh
+
+start: ## Religa tudo que o `make stop` derrubou
+	./scripts/start.sh
+
+custos: ## Mostra o que ainda esta ligado e cobrando
+	@echo "== EC2 =="
+	@aws ec2 describe-instances --filters "Name=tag:Project,Values=DriveGuard" "Name=instance-state-name,Values=running,stopped" --query "Reservations[].Instances[].[InstanceId,InstanceType,State.Name]" --output table
+	@echo "== RDS =="
+	@aws rds describe-db-instances --query "DBInstances[].[DBInstanceIdentifier,DBInstanceClass,DBInstanceStatus]" --output table
+	@echo "== VPC Endpoints de interface (cobram ~US\$$0,01/h por ENI) =="
+	@aws ec2 describe-vpc-endpoints --filters "Name=vpc-endpoint-type,Values=Interface" --query "VpcEndpoints[].[VpcEndpointId,ServiceName,State]" --output table
+	@echo "== NAT Gateways (nao deveria haver nenhum) =="
+	@aws ec2 describe-nat-gateways --filter "Name=state,Values=available" --query "NatGateways[].[NatGatewayId,State]" --output table
+	@echo "== Enderecos IPv4 publicos (cobram mesmo ociosos) =="
+	@aws ec2 describe-addresses --query "Addresses[].[PublicIp,InstanceId,AssociationId]" --output table
+	@echo "== SageMaker =="
+	@aws sagemaker list-notebook-instances --query "NotebookInstances[].[NotebookInstanceName,NotebookInstanceStatus]" --output table
 
 # -----------------------------------------------------------------------------
 # Operação

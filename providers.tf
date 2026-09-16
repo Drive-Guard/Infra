@@ -18,3 +18,10 @@ provider "aws" {
     tags = local.common_tags
   }
 }
+
+# Cloud Control API. Usado apenas para criar os buckets S3 — ver o cabecalho
+# de modules/storage/main.tf para o motivo.
+provider "awscc" {
+  region  = var.aws_region
+  profile = var.aws_profile != "" ? var.aws_profile : null
+}

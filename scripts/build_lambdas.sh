@@ -70,8 +70,10 @@ for dir in "$LAMBDAS_DIR"/*/; do
     "$PYTHON" -m pip install --quiet --upgrade --target "$destino" -r "$dir/requirements.txt"
   fi
 
+  # Os diretorios *.dist-info FICAM: o scramp, dependencia do pg8000, chama
+  # importlib.metadata.version() no proprio import. Sem a metadata a Lambda
+  # morre com "No package metadata was found for scramp".
   find "$destino" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-  find "$destino" -type d \( -name "*.dist-info" -o -name "*.egg-info" \) -exec rm -rf {} + 2>/dev/null || true
 
   echo "    ok - $(du -sk "$destino" | cut -f1) KB em build/$nome"
 done

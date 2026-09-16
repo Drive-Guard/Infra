@@ -224,7 +224,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_conexoes" {
 # ----------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "ec2_status" {
-  count = var.dashboard_instance_id != "" ? 1 : 0
+  count = var.monitor_dashboard_instance ? 1 : 0
 
   alarm_name          = "${var.name_prefix}-dashboard-status-check"
   alarm_description   = "Status check da EC2 do dashboard falhando"

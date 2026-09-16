@@ -18,8 +18,6 @@ locals {
   # pathexpand("~") devolve "C:/Users/..." no Windows e "/home/..." no resto.
   is_windows = !startswith(pathexpand("~"), "/")
 
-  build_command = local.is_windows ? "powershell -NoProfile -ExecutionPolicy Bypass -File \"${path.module}/scripts/build_lambdas.ps1\"" : "bash \"${path.module}/scripts/build_lambdas.sh\""
-
   # Muda quando qualquer .sql muda -> a migração roda de novo.
   sql_files = fileset("${path.module}/sql", "*.sql")
   sql_hash = sha1(join("", [
@@ -50,8 +48,13 @@ resource "null_resource" "build_lambdas" {
     script = filesha1(local.is_windows ? "${path.module}/scripts/build_lambdas.ps1" : "${path.module}/scripts/build_lambdas.sh")
   }
 
+  # `interpreter` explícito em vez de uma string única: no Windows o
+  # local-exec passa o comando por `cmd /C`, que engole as aspas do caminho e
+  # falha com "Caracteres inválidos no caminho". Com a lista, o Terraform
+  # executa o binário direto e o caminho chega inteiro.
   provisioner "local-exec" {
-    command     = local.build_command
+    interpreter = local.is_windows ? ["PowerShell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] : ["bash"]
+    command     = local.is_windows ? "${path.module}/scripts/build_lambdas.ps1" : "${path.module}/scripts/build_lambdas.sh"
     working_dir = path.module
   }
 }
@@ -85,6 +88,8 @@ module "storage" {
 
   name_prefix           = local.name_prefix
   suffix                = random_id.suffix.hex
+  region                = local.region
+  tags                  = local.common_tags
   force_destroy         = var.force_destroy_buckets
   bronze_retention_days = var.bronze_retention_days
   sql_dir               = "${path.module}/sql"
@@ -236,8 +241,9 @@ module "observability" {
   etl_gold_function_name   = module.etl.etl_gold_function_name
   dlq_name                 = module.etl.dlq_name
 
-  db_instance_id        = module.database.instance_id
-  dashboard_instance_id = var.enable_dashboard ? module.dashboard[0].instance_id : ""
+  db_instance_id             = module.database.instance_id
+  monitor_dashboard_instance = var.enable_dashboard
+  dashboard_instance_id      = var.enable_dashboard ? module.dashboard[0].instance_id : ""
 
   api_name  = module.ingest.api_name
   api_stage = var.api_stage_name
