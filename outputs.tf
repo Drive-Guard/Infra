@@ -191,22 +191,3 @@ output "cloudwatch_dashboard_name" {
   description = "Nome do dashboard do CloudWatch."
   value       = module.observability.dashboard_name
 }
-
-# ----------------------------------------------------------------------------
-# Usados por scripts/stop.* e scripts/start.*
-# ----------------------------------------------------------------------------
-
-output "aws_region_efetiva" {
-  description = "Região onde a infraestrutura foi provisionada."
-  value       = local.region
-}
-
-output "db_instance_id" {
-  description = "Identificador da instância RDS (para stop/start)."
-  value       = module.database.instance_id
-}
-
-output "gold_schedule_rule_name" {
-  description = "Nome da regra do EventBridge que agenda o refresh Gold."
-  value       = module.etl.gold_schedule_rule
-}
