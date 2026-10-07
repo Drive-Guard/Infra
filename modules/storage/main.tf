@@ -227,39 +227,51 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 # ----------------------------------------------------------------------------
 # Esvaziamento no destroy
 #
-# A Cloud Control API recusa apagar um bucket com objetos dentro, e o
-# `awscc_s3_bucket` não tem o equivalente ao `force_destroy` do recurso do
-# provider aws. Estes null_resource dependem dos buckets, então o Terraform os
-# destrói ANTES deles — esvaziando o bucket na hora certa.
+# A Cloud Control API recusa apagar bucket com objetos, e `awscc_s3_bucket`
+# não tem o `force_destroy` do provider aws. Como os buckets são VERSIONADOS,
+# `aws s3 rm --recursive` não basta: ele só remove a versão corrente e deixa
+# as versões antigas e os delete markers — e o destroy trava no bucket.
+# scripts/esvaziar_bucket.* apaga todas as versões.
+#
+# Estes null_resource dependem dos buckets, então o Terraform os destrói
+# ANTES deles. Provisioner de destroy só enxerga `self`, por isso tudo que o
+# comando precisa (script, SO, região) vai nos triggers.
 # ----------------------------------------------------------------------------
 
-resource "null_resource" "esvaziar_bronze" {
-  count = var.force_destroy ? 1 : 0
-
-  triggers = {
-    bucket = awscc_s3_bucket.bronze.bucket_name
-    region = var.region
-  }
-
-  provisioner "local-exec" {
-    when       = destroy
-    command    = "aws s3 rm s3://${self.triggers.bucket} --recursive --region ${self.triggers.region}"
-    on_failure = continue
-  }
+locals {
+  is_windows = !startswith(pathexpand("~"), "/")
+  script_esvaziar = abspath(
+    local.is_windows
+    ? "${path.module}/../../scripts/esvaziar_bucket.ps1"
+    : "${path.module}/../../scripts/esvaziar_bucket.sh"
+  )
 }
 
-resource "null_resource" "esvaziar_artifacts" {
-  count = var.force_destroy ? 1 : 0
+resource "null_resource" "esvaziar" {
+  for_each = var.force_destroy ? {
+    bronze    = awscc_s3_bucket.bronze.bucket_name
+    artifacts = awscc_s3_bucket.artifacts.bucket_name
+  } : {}
 
   triggers = {
-    bucket = awscc_s3_bucket.artifacts.bucket_name
-    region = var.region
+    bucket  = each.value
+    region  = var.region
+    windows = tostring(local.is_windows)
+    script  = local.script_esvaziar
   }
 
   provisioner "local-exec" {
-    when       = destroy
-    command    = "aws s3 rm s3://${self.triggers.bucket} --recursive --region ${self.triggers.region}"
-    on_failure = continue
+    when = destroy
+    interpreter = (
+      self.triggers.windows == "true"
+      ? ["PowerShell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+      : ["bash", "-c"]
+    )
+    command = (
+      self.triggers.windows == "true"
+      ? "& '${self.triggers.script}' -Bucket '${self.triggers.bucket}' -Regiao '${self.triggers.region}'"
+      : "'${self.triggers.script}' '${self.triggers.bucket}' '${self.triggers.region}'"
+    )
   }
 }
 

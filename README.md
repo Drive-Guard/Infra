@@ -22,7 +22,7 @@ monitoramento.
 7. [Validando a esteira ponta a ponta](#7-validando-a-esteira-ponta-a-ponta)
 8. [Modelo de dados](#8-modelo-de-dados)
 9. [Custo](#9-custo)
-10. [Controle de custo: parar e religar](#10-controle-de-custo-parar-e-religar)
+10. [Ligar e desligar](#10-ligar-e-desligar)
 11. [Operação do dia a dia](#11-operação-do-dia-a-dia)
 12. [Segurança e LGPD](#12-segurança-e-lgpd)
 13. [Solução de problemas](#13-solução-de-problemas)
@@ -577,8 +577,8 @@ Estimativa para `us-east-1`, com os defaults deste repositório.
 Com o orçamento de **US$100** do Learner Lab, o ambiente completo dura cerca de
 dois meses ligado direto. Como reduzir:
 
-- **pare a EC2 e o RDS** entre as sessões de trabalho (o lab já faz isso ao
-  encerrar a sessão) — corta a maior parte do custo;
+- **desligue (destrua) ao fim de cada sessão de trabalho** — parar EC2 e
+  RDS não basta, ver [seção 10](#10-ligar-e-desligar);
 - `enable_vpc_interface_endpoints = false` economiza ~US$15/mês, mas as Lambdas
   privadas param de emitir log — só faça isso depois que o pipeline estiver
   estável;
@@ -586,83 +586,50 @@ dois meses ligado direto. Como reduzir:
 
 ---
 
-## 10. Controle de custo: parar e religar
+## 10. Ligar e desligar
 
-> **O vazamento silencioso desta arquitetura são os VPC Endpoints.**
-> Ao encerrar a sessão, o Learner Lab já para a EC2 e o RDS sozinho — mas
-> endpoint de interface **não tem estado "parado"**. Cada ENI cobra
-> ~US$0,01/h enquanto existir, o que dá **~US$15/mês drenando com o ambiente
-> inteiro desligado**. Só deletar resolve.
+**O liga/desliga deste projeto é o próprio Terraform.** Não existe "pausar".
 
-### `make stop` — derruba o que cobra por hora, preserva os dados
+| Ação | Windows | Linux/macOS/Git Bash | Tempo |
+|---|---|---|---|
+| **Ligar** | `terraform apply` | `make up` | ~15 min |
+| **Desligar** | `./scripts/desligar.ps1` | `make down` | ~15 min |
+| Conferir o que existe | — | `make custos` | segundos |
 
-```bash
-make stop          # ou: ./scripts/stop.sh   |   ./scripts/stop.ps1
-```
+Desligar **apaga tudo, inclusive o banco e os buckets**. Ao ligar de novo, o
+schema é recriado e o seed de demonstração repovoa o banco — então o dashboard
+volta com dados, só não os mesmos.
 
-Na ordem: desabilita a regra do EventBridge (senão a Lambda Gold segue
-acordando de 5 em 5 min contra um banco parado), para a EC2, para o RDS e
-**remove os VPC Endpoints de interface**.
+O `desligar` não confia só no `destroy`: depois dele, consulta a conta e lista
+qualquer EC2, RDS, VPC Endpoint, Elastic IP, NAT, notebook SageMaker, bucket ou
+VPC do projeto que ainda exista. Sai com erro se encontrar algo.
 
-Preserva banco, buckets e o build do dashboard. Volta em ~5 min.
+### Por que não "parar"
 
-**Não zera o consumo.** Continuam cobrando:
+Uma versão anterior deste repositório tinha `make stop`, que parava EC2 e RDS
+e removia os VPC Endpoints, preservando os dados. **Ela deixou o ambiente
+ligado e consumiu US$30 do lab**, por três motivos que nenhum script de stop
+contorna:
 
-| Item | ~US$/mês |
-|---|---|
-| EBS da EC2 (20 GB gp3) | 1,60 |
-| Storage do RDS (20 GB gp3) | 2,30 |
-| Elastic IP | 3,60 |
-| **Resíduo total** | **~7,60** |
+- **o RDS religa sozinho depois de 7 dias parado** — é regra da AWS, não
+  configurável;
+- **o Start Lab religa a EC2** a cada nova sessão do Academy;
+- **VPC Endpoint, Elastic IP e discos cobram mesmo com tudo parado**.
 
-O Elastic IP merece nota: desde fevereiro de 2024 a AWS cobra por **todo**
-endereço IPv4 público, e um EIP preso a uma instância **parada** também conta.
-Parar a EC2 não elimina esse custo — ele só some no `destroy`.
+Por isso foi removido. Desligar = destruir.
 
-> ⚠️ **O stop do RDS dura no máximo 7 dias.** Passado o prazo a AWS religa a
-> instância automaticamente. Se for ficar mais de uma semana sem mexer,
-> destrua em vez de parar.
+### E quando houver dados que precisam sobreviver
 
-### `make start` — religa tudo
+Hoje o banco só tem dados sintéticos do seed, então perder tudo no destroy é
+aceitável. Quando houver dados reais, a saída é separar o que persiste do que
+é computação:
 
-```bash
-make start         # ou: ./scripts/start.sh  |   ./scripts/start.ps1
-```
+- exportar a Silver para um bucket fora deste Terraform antes do destroy, e
+  reimportar no apply;
+- ou mover a persistência para um serviço sem custo ocioso no plano do
+  estudante.
 
-A ordem importa e o script respeita: religa o RDS e **espera** ficar
-`available` (o boot da EC2 lê o banco), recria os endpoints, liga a EC2 e
-reabilita o agendamento. Leva de 4 a 7 minutos, quase tudo esperando o RDS.
-
-Se a sessão do Learner Lab expirou desde o stop, atualize
-`~/.aws/credentials` antes de rodar.
-
-### `make nuke` — a única forma de zerar
-
-```bash
-make nuke          # terraform destroy -auto-approve
-```
-
-Apaga tudo, inclusive o banco. Voltar é `terraform apply` (~15 min, e o
-dashboard rebuilda do zero).
-
-### `make custos` — o que ainda está ligado
-
-```bash
-make custos
-```
-
-Lista EC2, RDS, VPC Endpoints de interface, NAT Gateways, IPs públicos e
-notebooks do SageMaker. Use antes de fechar o notebook para conferir que nada
-ficou para trás.
-
-### Qual usar
-
-| Situação | Comando |
-|---|---|
-| Fim de uma sessão de trabalho, volto amanhã | `make stop` |
-| Vou ficar uma semana ou mais sem mexer | `make nuke` |
-| TCC entregue | `make nuke` |
-| Não sei o que está ligado | `make custos` |
+Isso fica para quando existir o dado.
 
 ---
 
@@ -774,9 +741,8 @@ Com os defaults (`force_destroy_buckets = true`, `skip_final_snapshot = true`,
 `db_deletion_protection = false`), o destroy remove tudo, inclusive buckets com
 objetos dentro. Leva cerca de 10 minutos, quase tudo apagando o RDS.
 
-> Se for **apresentar de novo depois**, não destrua: use `make stop`, que
-> preserva banco e dashboard e ainda remove os VPC Endpoints — o item que o
-> Learner Lab **não** desliga sozinho. Ver [seção 10](#10-controle-de-custo-parar-e-religar).
+> Prefira `./scripts/desligar.ps1` (ou `make down`): além do destroy, ele
+> confere que nada do projeto ficou cobrando na conta. Ver [seção 10](#10-ligar-e-desligar).
 
 ---
 
