@@ -55,10 +55,29 @@ function Invocar([string]$Funcao, [string]$Json) {
     throw "Falha ao invocar $Funcao"
 }
 
-Write-Host "==> Gerando $Dias dias de histórico (pode levar alguns minutos)..." -ForegroundColor Cyan
-$r = Invocar "$Prefixo-db-migrate" "{`"seed`": true, `"resemear`": true, `"dias`": $Dias}"
-if ($r -match '"erros": [1-9]' -or $r -match 'errorMessage') { throw "A migração falhou: $r" }
-Write-Host "    ok: $($r.Substring(0, [Math]::Min(200, $r.Length)))"
+# Pausa os dados ao vivo durante a injeção: leituras chegando no meio do seed
+# disputariam as mesmas tabelas. No fim, volta ao estado anterior.
+$regra = "$Prefixo-simulador"
+$ErrorActionPreference = "Continue"
+$estadoSimulador = aws events describe-rule --region $Regiao --name $regra --query State --output text 2>$null
+$ErrorActionPreference = "Stop"
+if ($estadoSimulador -eq "ENABLED") {
+    aws events disable-rule --region $Regiao --name $regra | Out-Null
+    Write-Host "==> Dados ao vivo pausados durante a injeção" -ForegroundColor Cyan
+}
+
+try {
+    Write-Host "==> Gerando $Dias dias de histórico (pode levar alguns minutos)..." -ForegroundColor Cyan
+    # A migração espera uma carga da PRF em andamento terminar (mesma trava).
+    $r = Invocar "$Prefixo-db-migrate" "{`"seed`": true, `"resemear`": true, `"dias`": $Dias}"
+    if ($r -match '"erros": [1-9]' -or $r -match 'errorMessage') { throw "A migração falhou: $r" }
+    Write-Host "    ok: $($r.Substring(0, [Math]::Min(200, $r.Length)))"
+} finally {
+    if ($estadoSimulador -eq "ENABLED") {
+        aws events enable-rule --region $Regiao --name $regra | Out-Null
+        Write-Host "==> Dados ao vivo religados" -ForegroundColor Cyan
+    }
+}
 
 Write-Host "==> Atualizando as views Gold" -ForegroundColor Cyan
 Invocar "$Prefixo-etl-gold" "{}" | Out-Null

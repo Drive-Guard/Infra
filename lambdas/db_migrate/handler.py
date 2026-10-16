@@ -47,6 +47,10 @@ SQL_PREFIX = os.environ.get("SQL_PREFIX", "sql/")
 SEED_MARKER = "seed"
 DIAS_PADRAO = int(os.environ.get("SEED_DIAS", "120"))
 LOCK_TIMEOUT = os.environ.get("MIGRATE_LOCK_TIMEOUT", "60s")
+# Mesma trava da Lambda prf_carga: a migração (DDL das views e o seed) espera
+# uma carga da PRF em andamento terminar, e vice-versa, em vez de as duas se
+# travarem nas mesmas tabelas (deadlock).
+TRAVA_CARGA = 482_001
 
 _SESSOES_SQL = """
     SELECT pid, application_name, state, wait_event_type,
@@ -137,39 +141,51 @@ def handler(event, context):
         return {"sessoes": sessoes}
 
     encerradas = _encerrar_esquecidas(cur)
-    # O seed lê o tamanho do histórico desta configuração da sessão.
-    cur.execute("SELECT set_config('driveguard.dias_historico', %s, false)", (str(dias),))
-    if event.get("resemear"):
-        # DELETE (e não TRUNCATE) respeita o ON DELETE SET NULL dos acidentes
-        # da PRF, que não têm empresa e ficam.
-        cur.execute("""
-            DO $$ BEGIN
-                IF to_regclass('silver.dispositivos') IS NOT NULL THEN
-                    DELETE FROM silver.incidentes WHERE origem = 'interno';
-                    DELETE FROM silver.dispositivos;
-                    DELETE FROM silver.empresas;
-                END IF;
-            END $$;
-        """)
-        logger.info("Frota apagada para resemear com %d dias", dias)
+    cur.execute("SELECT pg_advisory_lock(%s)", (TRAVA_CARGA,))
     conn.commit()
-    cur.close()
+    logger.info("Trava da carga obtida; aplicando a migração")
+    try:
+        # O seed lê o tamanho do histórico desta configuração da sessão.
+        cur.execute("SELECT set_config('driveguard.dias_historico', %s, false)", (str(dias),))
+        if event.get("resemear"):
+            # DELETE (e não TRUNCATE) respeita o ON DELETE SET NULL dos acidentes
+            # da PRF, que não têm empresa e ficam.
+            cur.execute("""
+                DO $$ BEGIN
+                    IF to_regclass('silver.dispositivos') IS NOT NULL THEN
+                        DELETE FROM silver.incidentes WHERE origem = 'interno';
+                        DELETE FROM silver.dispositivos;
+                        DELETE FROM silver.empresas;
+                    END IF;
+                END $$;
+            """)
+            logger.info("Frota apagada para resemear com %d dias", dias)
+        conn.commit()
+        cur.close()
 
-    scripts = _listar_scripts()
-    if not scripts:
-        raise RuntimeError(
-            f"Nenhum .sql encontrado em s3://{ARTIFACTS_BUCKET}/{SQL_PREFIX}"
-        )
+        scripts = _listar_scripts()
+        if not scripts:
+            raise RuntimeError(
+                f"Nenhum .sql encontrado em s3://{ARTIFACTS_BUCKET}/{SQL_PREFIX}"
+            )
 
-    resultados = []
-    for key in scripts:
-        nome = key.rsplit("/", 1)[-1].lower()
-        if SEED_MARKER in nome and not aplicar_seed:
-            logger.info("Seed ignorado (seed=false): %s", key)
-            resultados.append({"script": key, "status": "ignorado"})
-            continue
+        resultados = []
+        for key in scripts:
+            nome = key.rsplit("/", 1)[-1].lower()
+            if SEED_MARKER in nome and not aplicar_seed:
+                logger.info("Seed ignorado (seed=false): %s", key)
+                resultados.append({"script": key, "status": "ignorado"})
+                continue
 
-        resultados.append(_executar(conn, key))
+            resultados.append(_executar(conn, key))
+    finally:
+        # Sempre libera: a conexão é reaproveitada entre execuções, e uma trava
+        # esquecida deixaria as cargas da PRF esperando para sempre.
+        conn.rollback()
+        liberar = conn.cursor()
+        liberar.execute("SELECT pg_advisory_unlock(%s)", (TRAVA_CARGA,))
+        conn.commit()
+        liberar.close()
 
     erros = [r for r in resultados if r["status"] == "erro"]
 

@@ -26,7 +26,19 @@ invocar() {
   echo "Falha ao invocar $1" >&2; return 1
 }
 
+# Pausa os dados ao vivo durante a injeção (leituras no meio do seed disputariam
+# as mesmas tabelas) e volta ao estado anterior no fim.
+REGRA="$PREFIXO-simulador"
+ESTADO_SIM="$(aws events describe-rule --region "$REGIAO" --name "$REGRA" --query State --output text 2>/dev/null || echo NENHUM)"
+religar() { [ "$ESTADO_SIM" = "ENABLED" ] && aws events enable-rule --region "$REGIAO" --name "$REGRA" && echo "==> Dados ao vivo religados"; true; }
+if [ "$ESTADO_SIM" = "ENABLED" ]; then
+  aws events disable-rule --region "$REGIAO" --name "$REGRA"
+  echo "==> Dados ao vivo pausados durante a injeção"
+  trap religar EXIT
+fi
+
 echo "==> Gerando $DIAS dias de histórico (pode levar alguns minutos)..."
+# A migração espera uma carga da PRF em andamento terminar (mesma trava).
 r="$(invocar "$PREFIXO-db-migrate" "{\"seed\": true, \"resemear\": true, \"dias\": $DIAS}")"
 if echo "$r" | grep -Eq '"erros": [1-9]|errorMessage'; then echo "A migração falhou: $r" >&2; exit 1; fi
 echo "    ok: ${r:0:200}"
