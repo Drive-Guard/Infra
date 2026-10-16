@@ -4,7 +4,7 @@
 -- Não são números aleatórios soltos: o script simula a frota rodando dia a dia
 -- com o DriveGuard instalado, e cada tabela sai como consequência da anterior.
 -- 1 empresa, 16 motoristas, 16 caminhões/ônibus/vans com câmera, 8 rotas,
--- meses de histórico (120 dias por padrão; ajustável com SET
+-- um ano de histórico (365 dias por padrão; ajustável com SET
 -- driveguard.dias_historico, que a Lambda db_migrate define a partir da
 -- variável seed_dias_historico do Terraform) e os turnos que estão em
 -- andamento na hora da carga, que o simulador de frota continua.
@@ -34,15 +34,24 @@
 --   min). O tipo vem do sinal dominante: olhos fechados >= 1 s é microssono,
 --   cabeça caída é cabeça baixa, bocejo é bocejo excessivo. Distração (olhar
 --   fora da estrada) e perda de face são eventos à parte.
--- * Duas fases:
---     piloto (40% mais antigo): só o alarme na cabine; a central ainda não
---       acompanha, e a parada legal (Lei 13.103) é feita em metade dos turnos;
---     operação: a central atende os alertas graves (85%) com pausa
---       obrigatória de 25-30 min, encerra o turno no segundo alerta crítico,
---       liga para o motorista nos médios, e a frota adota parada a cada
---       4h30 (em 3 de cada 4 turnos).
+-- * Três fases, como uma implantação de verdade:
+--     piloto (primeiro quarto do histórico): só o alarme na cabine; a central
+--       ainda não acompanha e a parada legal (Lei 13.103) é feita em metade
+--       dos turnos;
+--     central (segundo quarto): a central atende os alertas graves (85%) com
+--       pausa obrigatória de 25-30 min, encerra o turno no segundo alerta
+--       crítico, liga para o motorista nos médios; parada a cada 4h30 em 3 de
+--       cada 4 turnos;
+--     programa (metade mais recente): programa de gestão da fadiga depois
+--       dos acidentes: turno da madrugada limitado a 8 h com parada a cada
+--       3h30, parada a cada 4 h para todos (85% dos turnos), escala revisada
+--       (menos dívida de sono) e treinamento individual dos motoristas mais
+--       suscetíveis, cuja fadiga cai nas semanas seguintes (ação registrada).
 --   A pausa zera as horas dirigidas, então a fadiga cai de verdade depois
---   dela: por isso o histórico melhora depois do piloto.
+--   dela: por isso o histórico melhora fase a fase.
+-- * Quase-acidentes: com fadiga muito alta, há ocorrências sem acidente
+--   (saída de faixa, quase colisão), registradas sem gravidade; na operação a
+--   central manda parar em seguida.
 -- * Acidentes da frota: risco proporcional à fadiga (cresce ao cubo acima de
 --   75) mais um risco de base pequeno, maior em distração. O risco é somado
 --   na frota e cada 1,0 acumulado vira um acidente, no momento em que a soma
@@ -79,9 +88,10 @@ DO $seed$
 DECLARE
     c_empresa   CONSTANT UUID := '00000000-0000-4000-8000-000000000001';
     c_tz        CONSTANT TEXT := 'America/Sao_Paulo';
-    v_dias      INT := COALESCE(NULLIF(current_setting('driveguard.dias_historico', TRUE), '')::INT, 120);
+    v_dias      INT := COALESCE(NULLIF(current_setting('driveguard.dias_historico', TRUE), '')::INT, 365);
     v_hoje      DATE := (now() AT TIME ZONE 'America/Sao_Paulo')::DATE;
     v_piloto_ate TIMESTAMPTZ;
+    v_programa_desde TIMESTAMPTZ;
 
     -- cadastros
     v_motorista UUID;
@@ -123,6 +133,9 @@ DECLARE
     v_tipo_v    silver.tipo_veiculo;
     v_noturno   BOOLEAN;
     v_susc      NUMERIC;
+    v_susc_base NUMERIC;
+    v_treinado  BOOLEAN;
+    v_data_treino DATE;
     v_min_saida INT;
     v_rs_km     NUMERIC;
     v_seq_trab  INT;
@@ -137,6 +150,7 @@ DECLARE
     v_dnum      INT;
     v_aberto    BOOLEAN;
     v_operacao  BOOLEAN;
+    v_fase      INT;
     v_inicio    TIMESTAMPTZ;
     v_fim       TIMESTAMPTZ;
     v_fim_plan  TIMESTAMPTZ;
@@ -197,6 +211,9 @@ DECLARE
     v_acao      silver.tipo_acao;
     v_lambda_s  NUMERIC;
     v_lambda_o  NUMERIC;
+    v_lambda_q  NUMERIC;
+    v_acc_quase NUMERIC := 0.5;
+    v_n_quase   INT := 0;
     v_soma_piloto NUMERIC := 0;
     v_soma_piloto_sono NUMERIC := 0;
     v_n_incid   INT := 0;
@@ -217,7 +234,9 @@ BEGIN
     END IF;
 
     PERFORM setseed(0.4242);
-    v_piloto_ate := now() - make_interval(days => CEIL(v_dias * 0.6)::INT);
+    -- Fases: piloto (1º quarto), central (2º quarto), programa (metade recente).
+    v_piloto_ate     := now() - make_interval(days => CEIL(v_dias * 0.75)::INT);
+    v_programa_desde := now() - make_interval(days => CEIL(v_dias * 0.5)::INT);
 
     -- ------------------------------------------------------------------ empresa
     INSERT INTO silver.empresas (id, cnpj_hash, razao_social, nome_fantasia, uf, cidade, frota_total)
@@ -305,7 +324,17 @@ BEGIN
         v_tipo_v    := v_tipos[1 + (i % 4)];
         -- Caminhoneiros de rota longa que saem de madrugada.
         v_noturno   := i IN (2, 6, 10, 14);
-        v_susc      := 0.8 + ((i * 5) % 9) * 0.1;
+        v_susc_base := 0.8 + ((i * 5) % 9) * 0.1;
+        -- Os mais suscetíveis fazem o treinamento no início do programa
+        -- (escalonado em até 30 dias); o efeito cresce em 45 dias.
+        v_treinado    := v_susc_base >= 1.3;
+        v_data_treino := (v_programa_desde AT TIME ZONE c_tz)::DATE + (i * 3) % 30;
+        IF v_treinado AND v_data_treino <= v_hoje THEN
+            INSERT INTO silver.acoes_motorista (motorista_id, tipo, descricao, realizado_em)
+            VALUES (v_motoristas[i], 'treinamento',
+                    'Programa de gestão da fadiga: treinamento sobre sono, pausas e sinais de alerta',
+                    (v_data_treino::TIMESTAMP + TIME '09:00') AT TIME ZONE c_tz);
+        END IF;
         v_min_saida := CASE
                            WHEN v_noturno               THEN 21 * 60 + 30 + (i % 3) * 30   -- 21h30 a 22h30
                            WHEN v_tipo_v = 'onibus'     THEN 13 * 60 + 30 + (i % 2) * 30   -- 13h30 a 14h
@@ -328,6 +357,8 @@ BEGIN
             -- rota (rotas curtas fazem ida e volta), +-30 min.
             v_inicio   := ((v_dia::TIMESTAMP + make_interval(mins => v_min_saida + (i * 7919 + v_dnum * 104729) % 51 - 25)) AT TIME ZONE c_tz);
             v_dur_h    := LEAST(10, GREATEST(6.5, v_dist_rota / 70.0 + 1)) + ((i * 31 + v_dnum * 17) % 11 - 5) / 10.0;
+            -- Programa: turno da madrugada limitado a 8 h.
+            IF v_noturno AND v_inicio >= v_programa_desde THEN v_dur_h := LEAST(v_dur_h, 8.0); END IF;
             v_fim_plan := v_inicio + make_interval(secs => (v_dur_h * 3600)::INT);
 
             -- Turno que ainda não começou fica para o simulador.
@@ -335,22 +366,28 @@ BEGIN
             -- Turno em andamento agora: leituras até este minuto, a cada 5 min.
             v_aberto := v_fim_plan > now();
             v_fim    := LEAST(v_fim_plan, now());
-            v_passo  := CASE WHEN v_aberto THEN 5 ELSE 10 END;
+            -- Leituras a cada 5 min no turno de agora, 10 min nos últimos 120
+            -- dias e 15 min no histórico mais antigo (volume do ano inteiro).
+            v_passo  := CASE WHEN v_aberto THEN 5 WHEN j <= 120 THEN 10 ELSE 15 END;
 
             v_seq_trab := v_seq_trab + 1;
-            v_operacao := v_inicio >= v_piloto_ate;
+            v_fase     := CASE WHEN v_inicio >= v_programa_desde THEN 2 WHEN v_inicio >= v_piloto_ate THEN 1 ELSE 0 END;
+            v_operacao := v_fase >= 1;
+            -- Treinamento: suscetibilidade cai até 25% nos 45 dias seguintes.
+            v_susc := v_susc_base * CASE WHEN v_treinado AND v_dia > v_data_treino
+                                         THEN 1 - 0.25 * LEAST(1, (v_dia - v_data_treino) / 45.0) ELSE 1 END;
             v_ida      := (v_dnum % 2 = 0);
 
             -- Dívida de sono do dia (noite mal dormida em ~12% dos dias).
-            v_divida := 1.2 * LEAST(v_seq_trab, 5)
+            v_divida := CASE WHEN v_fase = 2 THEN 0.8 ELSE 1.2 END * LEAST(v_seq_trab, 5)
                         + CASE WHEN v_noturno THEN 4 ELSE 0 END
                         + CASE WHEN (i * 13 + v_dnum * 7) % 100 < 12 THEN 8 + (i + v_dnum) % 5 ELSE 0 END
                         - CASE WHEN v_seq_trab = 1 THEN 2 ELSE 0 END;
 
             -- Parada legal: no piloto a cada 5h30 e só em metade dos turnos; na
             -- operação a frota adota parada a cada 4h30 em 3 de cada 4 turnos.
-            v_parada_h := CASE WHEN v_operacao THEN 4.5 ELSE 5.5 END;
-            v_respeita := (i * 17 + v_dnum * 3) % 100 < CASE WHEN v_operacao THEN 75 ELSE 50 END;
+            v_parada_h := CASE WHEN v_fase = 2 AND v_noturno THEN 3.5 WHEN v_fase = 2 THEN 4.0 WHEN v_fase = 1 THEN 4.5 ELSE 5.5 END;
+            v_respeita := (i * 17 + v_dnum * 3) % 100 < CASE v_fase WHEN 2 THEN 85 WHEN 1 THEN 75 ELSE 50 END;
 
             SELECT d.device_id, d.id INTO v_device, v_disp
             FROM silver.vinculos_dispositivo_veiculo vd
@@ -557,12 +594,49 @@ BEGIN
                 -- base (maior com o olhar fora da estrada).
                 v_lambda_s := 0.02 * power(GREATEST(0, (v_score - 75) / 25.0), 3) * v_passo / 10.0;
                 v_lambda_o := 0.000018 * CASE WHEN v_distracao THEN 20 ELSE 1 END * v_passo / 10.0;
-                IF NOT v_operacao THEN
+                IF v_fase = 0 THEN
                     v_soma_piloto := v_soma_piloto + v_lambda_s + v_lambda_o;
                     v_soma_piloto_sono := v_soma_piloto_sono + v_lambda_s;
                 END IF;
                 v_acc_sono  := v_acc_sono + v_lambda_s;
                 v_acc_outro := v_acc_outro + v_lambda_o;
+                -- Quase-acidente por sono (ocorrência sem acidente): bem mais
+                -- comum que o acidente, também concentrado na fadiga alta.
+                v_lambda_q := 0.05 * power(GREATEST(0, (v_score - 80) / 20.0), 2) * v_passo / 10.0;
+                v_acc_quase := v_acc_quase + v_lambda_q;
+                IF NOT v_aberto AND v_acc_quase >= 1 AND v_acc_sono < 1 AND v_acc_outro < 1 THEN
+                    v_acc_quase := v_acc_quase - 1;
+                    v_n_quase := v_n_quase + 1;
+                    v_hora_txt := to_char(v_ts AT TIME ZONE c_tz, 'HH24:MI');
+                    INSERT INTO silver.incidentes (empresa_id, motorista_id, veiculo_id, turno_id, origem, origem_id_externo,
+                                                   ocorrido_em, uf, municipio, br, km, latitude, longitude,
+                                                   causa, tipo_acidente, gravidade, qtd_mortos, qtd_feridos, qtd_ilesos,
+                                                   fase_dia, relacionado_sonolencia, descricao)
+                    SELECT c_empresa, v_motoristas[i], v_veiculos[i], v_turno, 'interno', 'SIM-Q-' || lpad(v_n_quase::TEXT, 3, '0'),
+                           v_ts,
+                           CASE WHEN v_pos < 0.3 THEN r.origem_uf WHEN v_pos > 0.7 THEN r.destino_uf ELSE v_meio_uf[v_idx_rota] END,
+                           CASE WHEN v_pos < 0.3 THEN r.origem_cidade WHEN v_pos > 0.7 THEN r.destino_cidade ELSE v_meio_cidade[v_idx_rota] END,
+                           v_br, ROUND((10 + random()::NUMERIC * 480)::NUMERIC, 1), ROUND(v_lat, 6), ROUND(v_lon, 6),
+                           'Condutor sonolento (sem acidente)',
+                           CASE (v_n_quase % 3) WHEN 0 THEN 'Quase acidente: saída de faixa sem colisão'
+                                                WHEN 1 THEN 'Quase acidente: quase colisão traseira'
+                                                ELSE 'Quase acidente: invasão do acostamento' END,
+                           NULL, 0, 0, 0,
+                           CASE WHEN v_hl >= 5 AND v_hl < 6.5 THEN 'Amanhecer'
+                                WHEN v_hl >= 6.5 AND v_hl < 18 THEN 'Pleno dia'
+                                WHEN v_hl >= 18 AND v_hl < 19 THEN 'Anoitecer'
+                                ELSE 'Plena Noite' END,
+                           TRUE,
+                           'Às ' || v_hora_txt || ', após ' || ROUND(v_ef, 1) || 'h sem pausa, com score de fadiga ' || ROUND(v_score) || '. '
+                           || CASE WHEN v_operacao THEN 'A central mandou parar em seguida (pausa de 30 min).'
+                                   ELSE 'Fase piloto: o motorista seguiu viagem.' END
+                    FROM silver.rotas r WHERE r.id = v_rota;
+                    -- Na operação, a central manda parar depois do susto.
+                    IF v_operacao THEN
+                        v_pausa_ate := v_ts + INTERVAL '30 minutes';
+                        v_ref := v_pausa_ate;
+                    END IF;
+                END IF;
 
                 IF NOT v_aberto AND (v_acc_sono >= 1 OR v_acc_outro >= 1) THEN
                     v_n_incid := v_n_incid + 1;
@@ -672,12 +746,21 @@ BEGIN
       FROM silver.alertas al
      WHERE al.id = a.alerta_id AND al.resolvido_em IS NOT NULL;
 
+    -- Treinamento eficaz = fadiga média do motorista nos 30 dias seguintes
+    -- menor que nos 30 dias anteriores.
+    UPDATE silver.acoes_motorista a
+       SET eficaz = (SELECT AVG(score_fadiga) FROM silver.leituras_fadiga l
+                      WHERE l.motorista_id = a.motorista_id AND l.registrado_em BETWEEN a.realizado_em AND a.realizado_em + INTERVAL '30 days')
+                  < (SELECT AVG(score_fadiga) FROM silver.leituras_fadiga l
+                      WHERE l.motorista_id = a.motorista_id AND l.registrado_em BETWEEN a.realizado_em - INTERVAL '30 days' AND a.realizado_em)
+     WHERE a.tipo = 'treinamento';
+
     -- ------------------------------------------------------------------ ROI
     -- Taxa anual esperada de acidentes da frota sem a central (fase piloto),
     -- calculada pela própria simulação.
     INSERT INTO silver.parametros_roi (empresa_id, chave, valor, fonte) VALUES
         (c_empresa, 'acidentes_ano_frota',
-         GREATEST(1, ROUND(v_soma_piloto / GREATEST(1, v_dias - CEIL(v_dias * 0.6)) * 365, 1)),
+         GREATEST(1, ROUND(v_soma_piloto / GREATEST(1, v_dias - CEIL(v_dias * 0.75)) * 365, 1)),
          'Histórico da frota antes do DriveGuard (fase piloto da simulação de demonstração)'),
         (c_empresa, 'horas_parada_por_acidente', 8, 'Informado pelo gestor (dados de demonstração)'),
         -- Cenário realista com a fração de acidentes por sono da própria frota
@@ -686,7 +769,7 @@ BEGIN
          ROUND(LEAST(0.9, GREATEST(0.06, v_soma_piloto_sono / NULLIF(v_soma_piloto, 0))), 3),
          'Histórico de acidentes da frota: fração ligada ao sono na fase piloto (simulação de demonstração)');
 
-    RAISE NOTICE 'Seed concluido: % acidentes simulados; taxa da fase piloto % por ano.',
-        v_n_incid, ROUND(v_soma_piloto / GREATEST(1, v_dias - CEIL(v_dias * 0.6)) * 365, 1);
+    RAISE NOTICE 'Seed concluido: % acidentes e % quase-acidentes simulados; taxa da fase piloto % por ano.',
+        v_n_incid, v_n_quase, ROUND(v_soma_piloto / GREATEST(1, v_dias - CEIL(v_dias * 0.75)) * 365, 1);
 END
 $seed$;

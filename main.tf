@@ -298,6 +298,7 @@ module "simulador" {
   ingest_url         = module.ingest.invoke_url
   api_key            = module.ingest.api_key_value
   cameras            = var.simulador_cameras
+  ativo              = var.dados_ao_vivo
   log_retention_days = var.lambda_log_retention_days
 
   # Os primeiros lotes precisam encontrar o schema já migrado.

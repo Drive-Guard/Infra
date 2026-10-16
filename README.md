@@ -453,7 +453,7 @@ recomeçar numa conta nova (ou no dia da apresentação):
 ```bash
 # 1. credenciais novas em ~/.aws/credentials
 terraform apply                       # sobe tudo, inclusive backend e dashboard
-./scripts/injetar_dados.ps1           # (ou .sh) 120 dias de operação simulada
+./scripts/injetar_dados.ps1           # (ou .sh) um ano de operação simulada
 ./scripts/injetar_dados.ps1 -Dias 180 # 6 meses
 ```
 
@@ -614,7 +614,7 @@ lida na hora, para o estado ao vivo.
 Com `seed_demo_data = true` (padrão), o banco nasce com 1 empresa (UUID fixo, o mesmo
 dos usuários do Cognito), 16 motoristas (`DRV-1000`…), 16 veículos com câmera (uma
 delas com histórico de troca), 8 rotas com as BRs e **meses de operação simulada**
-(`seed_dias_historico`, padrão 120 dias). Não são números soltos: o seed simula a
+(`seed_dias_historico`, padrão 365 dias). Não são números soltos: o seed simula a
 frota dia a dia e cada tabela é consequência da anterior.
 
 - **Perfis**: suscetibilidade à fadiga por motorista, saída de madrugada (4
@@ -626,19 +626,53 @@ frota dia a dia e cada tabela é consequência da anterior.
   saem do score.
 - **Alertas** quando entra em sonolento (tipo pelo sinal dominante), mais distração e
   perda de face.
-- **Fase piloto** (40% mais antigo: só o alarme na cabine) e **operação** (a central
-  atende os graves com pausa obrigatória, liga nos médios, encerra o turno no segundo
-  crítico; parada a cada 4h30). A pausa zera as horas sem pausa, então a fadiga cai
-  de verdade: a operação tem bem menos leituras sonolentas e alertas por dia.
+- **Três fases**, como uma implantação de verdade:
+  - **piloto** (primeiro quarto do ano): só o alarme na cabine;
+  - **central** (segundo quarto): a central atende os graves com pausa obrigatória,
+    liga nos médios, encerra o turno no segundo crítico; parada a cada 4h30;
+  - **programa** (metade recente): programa de gestão da fadiga depois dos acidentes:
+    madrugada limitada a 8 h com parada a cada 3h30, parada a cada 4 h para todos,
+    escala revisada e **treinamento individual** dos mais suscetíveis (a fadiga
+    deles cai nas semanas seguintes; a ação fica registrada e marcada como eficaz
+    quando a média dos 30 dias seguintes cai).
+
+  A pausa zera as horas sem pausa, então a fadiga cai de verdade fase a fase (na
+  simulação padrão, a média mensal sai de ~35 para ~25 e as leituras sonolentas de
+  ~7% para menos de 0,5%).
 - **Acidentes da frota** pelo risco acumulado (cresce ao cubo acima de score 75):
   acontecem onde houve detecção forte sem intervenção, quase sempre no piloto, e
-  interrompem o turno no ponto da rota onde o veículo está.
+  interrompem o turno no ponto da rota onde o veículo está. Há também acidentes sem
+  relação com sono (risco de base, maior com distração).
+- **Quase-acidentes** (ocorrência sem gravidade: saída de faixa, quase colisão) com
+  fadiga muito alta: bem mais comuns que os acidentes; na operação a central manda
+  parar em seguida.
 - **ROI**: `acidentes_ano_frota` é a taxa anual da fase piloto calculada pela própria
   simulação.
 
 A escala (saída, duração, folgas, paradas) é determinística pela data, e a Lambda
-simulador usa a mesma conta: o turno que o seed deixa aberto agora é o mesmo que o
-simulador continua, e as leituras param quando o turno acaba. Acidentes da PRF não
+simulador usa a mesma conta, nas regras da fase atual: o turno que o seed deixa
+aberto agora é o mesmo que o simulador continua, e as leituras param quando o turno
+acaba.
+
+**Dados ao vivo (simulador):** a Lambda `simulador` é disparada pelo EventBridge a cada
+minuto e envia as leituras dos motoristas em turno para a API de ingestão real (daí
+em diante é o caminho de produção). Para ligar ou desligar sem Terraform:
+
+```bash
+./scripts/dados_ao_vivo.ps1             # (ou .sh status) estado atual
+./scripts/dados_ao_vivo.ps1 -Desligar   # (ou .sh desligar) só o histórico
+./scripts/dados_ao_vivo.ps1 -Ligar      # (ou .sh ligar)
+```
+
+O estado inicial vem de `dados_ao_vivo` (padrão `true`); o `apply` seguinte não desfaz
+a escolha feita pelo script. Desligado, o dashboard mostra o histórico e nada
+"dirigindo agora" (os turnos da hora da injeção somem do "ao vivo" em 30 minutos).
+
+**Fontes do ROI:** os custos por acidente são os do IPEA/PRF (2015, base dez/2014),
+os mais recentes publicados por gravidade para rodovias federais, corrigidos pelo
+IPCA até o último mês disponível (Banco Central, SGS 433), o mesmo método da
+atualização simplificada do próprio IPEA (2020). As proporções de gravidade e as
+mortes por acidente vêm da PRF (5 anos carregados, `prf_anos`). Acidentes da PRF não
 são inventados: vêm da base real, carregada no próprio `apply`.
 
 Para conferir os números: `cd ../Backend && npx tsx scripts/estatisticas-seed.ts`

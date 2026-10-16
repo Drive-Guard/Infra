@@ -107,7 +107,7 @@ dashboard_key_pair_name = "vockey"
 # Base da PRF (comparativo nacional de acidentes)
 # ----------------------------------------------------------------------------
 
-prf_anos          = 2
+prf_anos          = 5
 load_prf_on_apply = true
 
 # ----------------------------------------------------------------------------
@@ -158,7 +158,7 @@ deploy_aplicacao = true
 
 # Meses de histórico fake no banco recém-criado. Para refazer depois:
 # scripts/injetar_dados.ps1 -Dias 180
-seed_dias_historico = 120
+seed_dias_historico = 365
 
 # ----------------------------------------------------------------------------
 # Machine Learning

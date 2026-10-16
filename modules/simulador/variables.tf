@@ -40,3 +40,9 @@ variable "log_retention_days" {
   type        = number
   default     = 7
 }
+
+variable "ativo" {
+  description = "Estado inicial dos dados ao vivo (regra do EventBridge). Depois, use scripts/dados_ao_vivo.*."
+  type        = bool
+  default     = true
+}

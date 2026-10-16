@@ -60,7 +60,13 @@ resource "aws_cloudwatch_event_rule" "simulador" {
   name                = local.function_name
   description         = "Dispara o simulador de telemetria a cada minuto"
   schedule_expression = "rate(1 minute)"
-  state               = "ENABLED"
+  state               = var.ativo ? "ENABLED" : "DISABLED"
+
+  # Depois de criada, quem liga e desliga é scripts/dados_ao_vivo.* (sem
+  # passar pelo Terraform): o apply seguinte não desfaz a escolha.
+  lifecycle {
+    ignore_changes = [state]
+  }
 }
 
 resource "aws_cloudwatch_event_target" "simulador" {

@@ -17,13 +17,13 @@
     simulador mantém os dados chegando a cada minuto depois disso).
 
 .EXAMPLE
-    ./scripts/injetar_dados.ps1            # 120 dias
-    ./scripts/injetar_dados.ps1 -Dias 180  # 6 meses
+    ./scripts/injetar_dados.ps1            # 365 dias (um ano)
+    ./scripts/injetar_dados.ps1 -Dias 180  # 6 meses (mais rápido)
 #>
 
 [CmdletBinding()]
 param(
-    [ValidateRange(7, 400)][int]$Dias = 120,
+    [ValidateRange(7, 400)][int]$Dias = 365,
     [string]$Regiao = "us-east-1",
     [string]$Prefixo = "driveguard-dev"
 )

@@ -9,9 +9,11 @@ ingestão, com a mesma API Key dos dispositivos. Tudo o que vem depois
 
 As câmeras e motoristas são os do seed (dg-edge-0001 com DRV-1000, e assim
 por diante), e a escala e o modelo de fadiga são os MESMOS do seed
-(sql/05_seed_demo.sql): horário de saída pelo perfil, duração pela rota,
-folgas 5x2, parada a cada 4h30 em 3 de cada 4 turnos, dívida de sono e ritmo
-circadiano, tudo calculado a partir da data, sem sorteio. Por isso o turno que
+(sql/05_seed_demo.sql), nas regras da fase atual (programa de gestão da
+fadiga): horário de saída pelo perfil, duração pela rota (madrugada limitada a
+8 h), folgas 5x2, parada a cada 4 h (3h30 na madrugada) em 85% dos turnos,
+escala revisada, efeito do treinamento nos motoristas mais suscetíveis, dívida
+de sono e ritmo circadiano, tudo calculado a partir da data, sem sorteio. Por isso o turno que
 o seed deixou aberto continua aqui sem salto, cada câmera só envia enquanto o
 motorista está no turno (fora dele, e durante a parada, não há lote) e o ETL
 fecha o turno quando as leituras param.
@@ -53,8 +55,14 @@ TIPOS_VEICULO = ["caminhao", "onibus", "caminhao", "van"]
 NOTURNOS = {2, 6, 10, 14}
 # Deslocamento das folgas (índice = número do motorista), igual ao seed.
 FOLGA_OFFSET = [None, 0, 1, 0, 1, 2, 3, 2, 3, 4, 5, 4, 5, 6, 0, 6, 2]
-PARADA_A_CADA_H = 4.5
+# Fase atual da simulação (programa): ver sql/05_seed_demo.sql.
+PARADA_A_CADA_H = 4.0
+PARADA_MADRUGADA_H = 3.5
 DURACAO_PARADA_H = 0.5
+DURACAO_MAX_MADRUGADA_H = 8.0
+# Treinamento: quem tinha suscetibilidade >= 1,3 caiu 25% depois do programa.
+LIMIAR_TREINAMENTO = 1.3
+EFEITO_TREINAMENTO = 0.75
 
 
 def _iso(ts: datetime) -> str:
@@ -78,10 +86,11 @@ def perfil(i: int) -> dict:
         saida = 13 * 60 + 30 + (i % 2) * 30
     else:
         saida = 5 * 60 + 30 + (i % 5) * 35
+    base = 0.8 + ((i * 5) % 9) * 0.1
     return {
         "tipo": tipo,
         "noturno": noturno,
-        "suscetibilidade": 0.8 + ((i * 5) % 9) * 0.1,
+        "suscetibilidade": base * (EFEITO_TREINAMENTO if base >= LIMIAR_TREINAMENTO - 1e-9 else 1.0),
         "saida_min": saida,
         "distancia_km": DISTANCIA_ROTA_KM[i % 8],
     }
@@ -100,12 +109,14 @@ def turno_do_dia(i: int, dia: date) -> dict | None:
     minutos = p["saida_min"] + (i * 7919 + dnum * 104729) % 51 - 25
     inicio = datetime(dia.year, dia.month, dia.day, tzinfo=FUSO) + timedelta(minutes=minutos)
     duracao = min(10.0, max(6.5, p["distancia_km"] / 70.0 + 1)) + ((i * 31 + dnum * 17) % 11 - 5) / 10.0
+    if p["noturno"]:
+        duracao = min(duracao, DURACAO_MAX_MADRUGADA_H)
 
     seguidos = 0
     while seguidos < 5 and not folga(i, dnum - seguidos):
         seguidos += 1
     divida = (
-        1.2 * seguidos
+        0.8 * seguidos
         + (4 if p["noturno"] else 0)
         + (8 + (i + dnum) % 5 if (i * 13 + dnum * 7) % 100 < 12 else 0)
         - (2 if seguidos == 1 else 0)
@@ -114,7 +125,8 @@ def turno_do_dia(i: int, dia: date) -> dict | None:
         "inicio": inicio,
         "fim": inicio + timedelta(seconds=int(duracao * 3600)),
         "divida": divida,
-        "respeita_parada": (i * 17 + dnum * 3) % 100 < 75,
+        "respeita_parada": (i * 17 + dnum * 3) % 100 < 85,
+        "parada_a_cada_h": PARADA_MADRUGADA_H if p["noturno"] else PARADA_A_CADA_H,
     }
 
 
@@ -133,9 +145,10 @@ def horas_sem_pausa(turno: dict, agora: datetime) -> float | None:
     total = (agora - turno["inicio"]).total_seconds() / 3600
     if not turno["respeita_parada"]:
         return total
-    ciclo = PARADA_A_CADA_H + DURACAO_PARADA_H
+    a_cada = turno.get("parada_a_cada_h", PARADA_A_CADA_H)
+    ciclo = a_cada + DURACAO_PARADA_H
     dentro = total - math.floor(total / ciclo) * ciclo
-    return None if dentro >= PARADA_A_CADA_H else dentro
+    return None if dentro >= a_cada else dentro
 
 
 # ---------------------------------------------------------------------------

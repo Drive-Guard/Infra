@@ -69,9 +69,25 @@ def test_perfis_de_horario():
 
 def test_parada_interrompe_as_leituras():
     simulador = carregar_lambda("simulador")
-    turno = {"inicio": datetime(2026, 10, 16, 9, tzinfo=timezone.utc), "respeita_parada": True}
-    assert simulador.horas_sem_pausa(turno, turno["inicio"] + timedelta(hours=4.7)) is None
-    assert abs(simulador.horas_sem_pausa(turno, turno["inicio"] + timedelta(hours=5.5)) - 0.5) < 1e-6
+    # Parada a cada 4 h (fase atual do programa): 4h00-4h30 parado.
+    turno = {"inicio": datetime(2026, 10, 16, 9, tzinfo=timezone.utc), "respeita_parada": True, "parada_a_cada_h": 4.0}
+    assert simulador.horas_sem_pausa(turno, turno["inicio"] + timedelta(hours=4.2)) is None
+    assert abs(simulador.horas_sem_pausa(turno, turno["inicio"] + timedelta(hours=5.0)) - 0.5) < 1e-6
+    # Madrugada: parada a cada 3h30.
+    noturno = {**turno, "parada_a_cada_h": 3.5}
+    assert simulador.horas_sem_pausa(noturno, noturno["inicio"] + timedelta(hours=3.7)) is None
+
+
+def test_madrugada_limitada_a_8h_e_treinamento():
+    simulador = carregar_lambda("simulador")
+    for camera in (2, 6, 10, 14):  # turno da madrugada
+        for d in range(14):
+            t = simulador.turno_do_dia(camera, date(2026, 10, 1) + timedelta(days=d))
+            if t:
+                assert (t["fim"] - t["inicio"]).total_seconds() / 3600 <= 8.0 + 1e-6
+    # Suscetibilidade >= 1,3 já com o efeito do treinamento (-25%).
+    assert abs(simulador.perfil(7)["suscetibilidade"] - 1.6 * 0.75) < 1e-9
+    assert abs(simulador.perfil(2)["suscetibilidade"] - 0.9) < 1e-9
 
 
 def test_score_sobe_com_as_horas_de_direcao():

@@ -268,7 +268,7 @@ resource "aws_lambda_function" "db_migrate" {
   filename         = data.archive_file.db_migrate.output_path
   source_code_hash = data.archive_file.db_migrate.output_base64sha256
 
-  timeout     = 600
+  timeout     = 900
   memory_size = 512
 
   vpc_config {
@@ -283,9 +283,9 @@ resource "aws_lambda_function" "db_migrate" {
       SEED_DEMO        = tostring(var.seed_demo_data)
       SEED_DIAS        = tostring(var.seed_dias)
       # O timeout do pg8000 vale para cada leitura do socket, não só para a
-      # conexão: o seed (a simulação de meses de operação) fica vários
-      # segundos sem resposta do banco. Abaixo do timeout da Lambda.
-      DB_CONNECT_TIMEOUT = "540"
+      # conexão: o seed (a simulação de um ano de operação) fica minutos sem
+      # resposta do banco. Abaixo do timeout da Lambda.
+      DB_CONNECT_TIMEOUT = "850"
     })
   }
 

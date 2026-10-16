@@ -393,9 +393,9 @@ variable "force_destroy_buckets" {
 # ----------------------------------------------------------------------------
 
 variable "prf_anos" {
-  description = "Quantos anos mais recentes da base de acidentes da PRF carregar."
+  description = "Quantos anos mais recentes da base de acidentes da PRF carregar (tendência anual e proporções de gravidade mais estáveis)."
   type        = number
-  default     = 2
+  default     = 5
 }
 
 variable "load_prf_on_apply" {
@@ -472,7 +472,17 @@ variable "ia_api_key" {
 # ----------------------------------------------------------------------------
 
 variable "enable_simulador" {
-  description = "Liga a Lambda que simula as câmeras do seed enviando dados a cada minuto (dados ao vivo na demonstração)."
+  description = "Cria a Lambda que simula as câmeras do seed enviando dados a cada minuto (dados ao vivo na demonstração)."
+  type        = bool
+  default     = true
+}
+
+variable "dados_ao_vivo" {
+  description = <<-EOT
+    Estado inicial do simulador (true = enviando a cada minuto). Depois do
+    apply, ligue e desligue com scripts/dados_ao_vivo.ps1 (ou .sh), sem
+    Terraform: o apply seguinte não desfaz a escolha.
+  EOT
   type        = bool
   default     = true
 }
@@ -500,9 +510,9 @@ variable "site_dir" {
 }
 
 variable "seed_dias_historico" {
-  description = "Dias de histórico fake gerados pelo seed (motoristas, turnos, leituras, alertas)."
+  description = "Dias de histórico gerados pela simulação do seed (turnos, leituras, alertas, ações, acidentes)."
   type        = number
-  default     = 120
+  default     = 365
 
   validation {
     condition     = var.seed_dias_historico >= 7 && var.seed_dias_historico <= 400

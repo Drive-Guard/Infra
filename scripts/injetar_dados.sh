@@ -3,11 +3,11 @@
 # Gera de novo a massa de dados de demonstração (meses de histórico fake).
 # Equivalente POSIX de scripts/injetar_dados.ps1 — ver o cabeçalho de lá.
 #
-# Uso: ./scripts/injetar_dados.sh [dias]   (padrão 120)
+# Uso: ./scripts/injetar_dados.sh [dias]   (padrão 365)
 
 set -euo pipefail
 
-DIAS="${1:-120}"
+DIAS="${1:-365}"
 REGIAO="${REGIAO:-us-east-1}"
 PREFIXO="${PREFIXO:-driveguard-dev}"
 TMP="$(mktemp -d)"

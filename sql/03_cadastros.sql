@@ -211,7 +211,7 @@ INSERT INTO silver.parametros_roi_padrao (chave, valor, unidade, descricao, font
      'Custo médio de um acidente sem vítimas nas rodovias federais.',
      'IPEA 2015, tabela 8', 'https://www.ipea.gov.br/portal/images/stories/PDFs/relatoriopesquisa/150922_relatorio_acidentes_transito.pdf', 'dez/2014', TRUE),
     ('fator_ipca', 1.8956, 'fator',
-     'IPCA acumulado desde dez/2014, para trazer os custos do IPEA a valores atuais. Atualizado pelo ETL semanal.',
+     'IPCA acumulado desde dez/2014, para trazer os custos do IPEA a valores atuais (o mesmo método da atualização simplificada do próprio IPEA, 2020: os custos médios de 2014 corrigidos pelo IPCA). Atualizado pelo ETL semanal.',
      'Banco Central, SGS série 433', 'https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados?formato=json', 'jan/2015 a set/2026', FALSE),
     ('proporcao_fatal_padrao', 0.0399, 'fração',
      'Proporção de acidentes com morte, usada enquanto a base da PRF não estiver carregada.',
