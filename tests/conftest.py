@@ -60,7 +60,12 @@ def criar_banco(nome: str, arquivos: list[str]):
     adm.autocommit = True
     cur = adm.cursor()
     cur.execute(f'DROP DATABASE IF EXISTS "{nome}" WITH (FORCE)')
-    cur.execute(f'CREATE DATABASE "{nome}"')
+    # UTF8 e ICU pt-BR, como o RDS (um cluster local no Windows nasce em
+    # WIN1252, e com LC_CTYPE C o lower() não trata letras acentuadas).
+    cur.execute(
+        f'CREATE DATABASE "{nome}" TEMPLATE template0 ENCODING \'UTF8\' '
+        "LOCALE_PROVIDER icu ICU_LOCALE 'pt-BR' LC_COLLATE 'C' LC_CTYPE 'C'"
+    )
     adm.close()
     conn = conectar(nome)
     aplicar(conn, arquivos)

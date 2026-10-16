@@ -357,9 +357,11 @@ COMMENT ON TABLE silver.prf_cargas IS
 
 -- Classificação de veículo pesado (caminhão e ônibus, inclusive reboques
 -- puxados por caminhão-trator). É o recorte que interessa ao DriveGuard.
+-- O translate baixa as maiúsculas acentuadas sem depender do locale do banco:
+-- com LC_CTYPE C o lower() deixaria "Ônibus" de fora.
 CREATE OR REPLACE FUNCTION silver.fn_veiculo_pesado(p_tipo TEXT)
 RETURNS BOOLEAN AS $$
-    SELECT lower(coalesce(p_tipo, '')) IN (
+    SELECT lower(translate(coalesce(p_tipo, ''), 'ÁÀÂÃÉÊÍÓÔÕÚÜÇ', 'áàâãéêíóôõúüç')) IN (
         'caminhão', 'caminhão-trator', 'caminhão-tanque', 'semireboque', 'reboque',
         'ônibus', 'micro-ônibus'
     );

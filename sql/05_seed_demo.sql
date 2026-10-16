@@ -2,8 +2,12 @@
 -- DriveGuard — Dados sintéticos de demonstração
 --
 -- Frota de exemplo para o dashboard sair do zero na banca: 1 empresa,
--- 16 motoristas, 16 caminhões/ônibus com câmera, 8 rotas, 2 semanas de
+-- 16 motoristas, 16 caminhões/ônibus/vans com câmera, 8 rotas, 8 semanas de
 -- histórico e 12 turnos em andamento no momento do deploy.
+--
+-- O histórico mais antigo é um pouco mais cansado que o recente (a frota
+-- "melhora" depois de adotar as pausas), para os comparativos contra o
+-- período anterior terem o que mostrar.
 --
 -- Coerência com o resto da solução:
 --   * a empresa tem UUID fixo, o mesmo que os usuários de demonstração do
@@ -39,6 +43,7 @@ DECLARE
     v_horas     NUMERIC;
     v_score     NUMERIC(5,2);
     v_sono      BOOLEAN;
+    v_aberto    BOOLEAN;
     v_estado    silver.estado_fadiga;
     v_perclos   NUMERIC;
     v_mar       NUMERIC;
@@ -148,12 +153,12 @@ BEGIN
     END LOOP;
 
     -- ------------------------------------------------- turnos, viagens e leituras
-    -- Para cada motorista: 6 turnos concluídos nas últimas 2 semanas e, para os
-    -- 12 primeiros, um turno em andamento agora.
+    -- Para cada motorista: 16 turnos concluídos nas últimas 8 semanas e, para
+    -- os 12 primeiros, um turno em andamento agora.
     FOR i IN 1..16 LOOP
         v_rota := v_rotas[1 + (i % 8)];
 
-        FOR j IN 0..6 LOOP
+        FOR j IN 0..16 LOOP
             IF j = 0 AND i > 12 THEN CONTINUE; END IF;
 
             IF j = 0 THEN
@@ -164,7 +169,7 @@ BEGIN
             ELSE
                 v_dur_h  := 6 + (i + j) % 5;
                 v_inicio := now()
-                            - ((j * 2 + (i % 3)) || ' days')::INTERVAL
+                            - make_interval(days => (j * 18) / 5 + (i % 3))
                             - ((6 + (i * j) % 14) || ' hours')::INTERVAL;
                 v_fim    := v_inicio + (v_dur_h || ' hours')::INTERVAL;
                 v_passo  := INTERVAL '15 minutes';
@@ -209,6 +214,8 @@ BEGIN
                     + v_horas * 6.5
                     + CASE WHEN v_hora_loc BETWEEN 0 AND 5 THEN 18 ELSE 0 END
                     + (i % 4) * 4
+                    -- histórico antigo um pouco mais cansado (até +6 pontos)
+                    + j * 0.4
                     + (random() * 14 - 7)));
 
                 v_sono   := v_score >= 50;
@@ -249,6 +256,11 @@ BEGIN
                         ELSE 'sonolencia'
                     END::silver.tipo_alerta;
 
+                    -- Turno atual: metade ainda aberta, metade reconhecida pela
+                    -- central (só se o reconhecimento já aconteceu). Turnos
+                    -- antigos: tudo resolvido.
+                    v_aberto := j = 0 AND (random() < 0.5 OR v_ts + INTERVAL '4 minutes' > now());
+
                     INSERT INTO silver.alertas (turno_id, motorista_id, veiculo_id, disparado_em, tipo,
                                                 gravidade, status, score_fadiga, mensagem,
                                                 reconhecido_em, resolvido_em)
@@ -256,10 +268,12 @@ BEGIN
                             CASE WHEN v_score >= 90 THEN 'critica'
                                  WHEN v_score >= 80 THEN 'alta'
                                  ELSE 'media' END::silver.gravidade,
-                            CASE WHEN j = 0 AND random() < 0.5 THEN 'aberto' ELSE 'resolvido' END::silver.status_alerta,
+                            CASE WHEN v_aberto THEN 'aberto'
+                                 WHEN j = 0 THEN 'reconhecido'
+                                 ELSE 'resolvido' END::silver.status_alerta,
                             ROUND(v_score, 2),
                             'P(sono) de ' || ROUND(v_score / 100, 2) || ' após ' || ROUND(v_horas, 1) || 'h ao volante.',
-                            v_ts + INTERVAL '4 minutes',
+                            CASE WHEN v_aberto THEN NULL ELSE v_ts + INTERVAL '4 minutes' END,
                             CASE WHEN j = 0 THEN NULL ELSE v_ts + INTERVAL '25 minutes' END)
                     ON CONFLICT (motorista_id, disparado_em, tipo) DO NOTHING;
                 END IF;
@@ -271,7 +285,8 @@ BEGIN
     END LOOP;
 
     -- ------------------------------------------------------------------ ações
-    -- Alertas graves resolvidos viram ações do gestor ("atendidos" no ROI).
+    -- A maior parte dos alertas graves resolvidos tem uma ação registrada
+    -- ("atendidos" no ROI); o resto foi resolvido sem registro.
     INSERT INTO silver.acoes_motorista (motorista_id, turno_id, alerta_id, tipo, descricao, realizado_em, eficaz)
     SELECT a.motorista_id, a.turno_id, a.id,
            CASE WHEN a.gravidade = 'critica' THEN 'encerramento_turno'
@@ -280,7 +295,7 @@ BEGIN
            a.disparado_em + INTERVAL '6 minutes',
            TRUE
     FROM silver.alertas a
-    WHERE a.status = 'resolvido' AND a.gravidade IN ('alta', 'critica');
+    WHERE a.status = 'resolvido' AND a.gravidade IN ('alta', 'critica') AND random() < 0.85;
 
     -- ------------------------------------------------- ocorrências internas
     INSERT INTO silver.incidentes (empresa_id, motorista_id, veiculo_id, origem, origem_id_externo,
@@ -293,24 +308,6 @@ BEGIN
         (c_empresa, v_motoristas[9], v_veiculos[9], 'interno', 'DEMO-OC-2',
          now() - INTERVAL '75 days', 'PR', 'Curitiba', '116', 102.0, 'Falta de atenção à condução', 'Colisão traseira',
          'com_feridos', 0, 1, 1, FALSE, 'Colisão leve em congestionamento.');
-
-    -- ------------------------------------------------------------------ insights
-    -- Exemplos do que o gerador de IA produz. São substituídos na primeira
-    -- execução do gerador.
-    INSERT INTO silver.insights_frota (empresa_id, categoria, titulo, descricao, severidade, acao_sugerida,
-                                       metrica_referencia, origem, valido_ate)
-    VALUES
-      (c_empresa, 'recomendacao', 'Pico de sono na madrugada',
-       'Os alertas da frota se concentram entre 0h e 5h, quando o score médio sobe mais de 20 pontos.',
-       'alta', 'Revisar a escala noturna e prever pausa a cada 3 horas',
-       jsonb_build_object('janela', '00:00-05:00'), 'regra', now() + INTERVAL '1 day'),
-      (c_empresa, 'recomendacao', 'Fadiga cresce depois de 5 horas ao volante',
-       'O score médio passa do limite de alerta a partir da quinta hora contínua de direção.',
-       'media', 'Programar pausa obrigatória de 20 minutos na quinta hora',
-       jsonb_build_object('hora_limite', 5), 'regra', now() + INTERVAL '1 day'),
-      (c_empresa, 'resumo', 'Resumo do período',
-       'A fadiga média ficou estável. Caminhões tiveram score maior que ônibus. A Rio-Bahia concentrou mais alertas.',
-       'baixa', NULL, NULL, 'regra', now() + INTERVAL '1 day');
 
     RAISE NOTICE 'Seed concluido.';
 END
