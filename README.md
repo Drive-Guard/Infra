@@ -431,8 +431,23 @@ terraform output -raw dashboard_url
 terraform output -json usuarios_demo     # admin, gestor e operador, com senha gerada
 ```
 
-Para ter um login fácil de digitar (banca, testes manuais), defina um usuário de teste
-no `terraform.tfvars` local, que não vai para o git:
+### Cofre de segredos do grupo
+
+A chave da IA (Gemini) e o usuário de teste ficam **versionados e cifrados** em
+`segredos/segredos.tfvars.enc` (AES-256, chave derivada da senha do grupo por
+PBKDF2-SHA256 com 200 mil iterações; mesmo formato do `openssl`). Quem tem a senha:
+
+```bash
+./scripts/segredos.ps1 -Abrir     # (ou ./scripts/segredos.sh abrir) cria segredos.auto.tfvars
+terraform apply                   # o Terraform lê o segredos.auto.tfvars sozinho
+```
+
+Para mudar um segredo: edite o `segredos.auto.tfvars`, rode `-Fechar` (ou `fechar`) e
+faça o commit do `.enc`. A senha pode vir em `DG_SEGREDOS_SENHA` (sem digitar). O
+arquivo aberto (`*.auto.tfvars`) nunca vai para o git. A senha do cofre não fica em
+lugar nenhum do repositório: combinem entre vocês.
+
+Sem o cofre, dá para definir os mesmos valores à mão no `terraform.tfvars` local:
 
 ```hcl
 usuario_teste = {
