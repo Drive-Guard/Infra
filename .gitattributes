@@ -2,3 +2,6 @@
 # checkout no Windows (com CRLF o bash falha com "$'\r': command not found").
 *.sh     text eol=lf
 *.tftpl  text eol=lf
+
+# Cofre de segredos: chega idêntico em qualquer sistema (sem conversão de linha).
+*.enc    -text
