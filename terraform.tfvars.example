@@ -133,7 +133,9 @@ criar_usuarios_demo = true
 # Vazio = insights só pelas regras. Prefira passar por variável de ambiente:
 #   TF_VAR_ia_api_key=...
 # ia_api_key = ""
-ia_modelo = "gemini-2.5-flash"
+# Um ou mais modelos, separados por vírgula: o próximo é usado se o anterior
+# estiver com alta demanda, sem cota ou retirado.
+ia_modelo = "gemini-3.6-flash,gemini-3.5-flash"
 
 # Remetente verificado no SES. O Learner Lab bloqueia o SES: com o campo
 # vazio, o relatório agendado fica disponível por link.

@@ -455,9 +455,9 @@ variable "email_remetente" {
 }
 
 variable "ia_modelo" {
-  description = "Modelo de IA dos insights (camada gratuita do Google Gemini)."
+  description = "Modelos de IA dos insights (Google Gemini), separados por vírgula: o próximo é usado se o anterior falhar."
   type        = string
-  default     = "gemini-2.5-flash"
+  default     = "gemini-3.6-flash,gemini-3.5-flash"
 }
 
 variable "ia_api_key" {

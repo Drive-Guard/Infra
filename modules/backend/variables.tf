@@ -108,7 +108,7 @@ variable "email_remetente" {
 variable "ia_modelo" {
   description = "Modelo de IA usado nos insights (camada gratuita)."
   type        = string
-  default     = "gemini-2.5-flash"
+  default     = "gemini-3.6-flash,gemini-3.5-flash"
 }
 
 variable "ia_api_key" {
