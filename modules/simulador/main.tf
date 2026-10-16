@@ -44,7 +44,7 @@ resource "aws_lambda_function" "simulador" {
       INGEST_URL        = var.ingest_url
       API_KEY           = var.api_key
       CAMERAS           = tostring(var.cameras)
-      LEITURAS_POR_LOTE = "12"
+      LEITURAS_POR_LOTE = "1"
     }
   }
 

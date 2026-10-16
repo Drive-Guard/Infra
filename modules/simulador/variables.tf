@@ -32,7 +32,7 @@ variable "api_key" {
 variable "cameras" {
   description = "Quantas câmeras do seed enviam dados (dg-edge-0001 em diante)."
   type        = number
-  default     = 6
+  default     = 16
 }
 
 variable "log_retention_days" {

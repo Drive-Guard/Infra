@@ -57,6 +57,7 @@ def _conectar():
         user=os.environ["DB_USER"],
         password=os.environ["DB_PASSWORD"],
         ssl_context=_ssl_context(),
+        # Vale para a conexão e para cada leitura do socket (ver o db_migrate).
         timeout=int(os.environ.get("DB_CONNECT_TIMEOUT", "10")),
         application_name=os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "driveguard-etl"),
     )

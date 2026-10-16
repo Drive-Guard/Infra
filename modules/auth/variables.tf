@@ -45,3 +45,27 @@ variable "usuarios_demo" {
     error_message = "O papel de cada usuário precisa ser admin, gestor ou operador."
   }
 }
+
+variable "usuario_teste" {
+  description = "Usuário de teste com senha definida no tfvars (null para não criar)."
+  type = object({
+    email = string
+    nome  = string
+    papel = string
+    senha = string
+  })
+  default   = null
+  sensitive = true
+}
+
+variable "senha_tamanho_minimo" {
+  description = "Tamanho mínimo das senhas do Cognito."
+  type        = number
+  default     = 10
+}
+
+variable "senha_exige_maiuscula" {
+  description = "Se as senhas do Cognito precisam de letra maiúscula."
+  type        = bool
+  default     = true
+}

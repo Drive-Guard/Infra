@@ -118,6 +118,17 @@ load_prf_on_apply = true
 # Senhas: terraform output -json usuarios_demo
 criar_usuarios_demo = true
 
+# Usuário de teste com senha escolhida por você (opcional). Deixe só no
+# terraform.tfvars local: este arquivo não vai para o git.
+# usuario_teste = {
+#   email = "teste@driveguard.dev"
+#   nome  = "Usuário de Teste"
+#   papel = "admin"
+#   senha = "troque-esta-senha"
+# }
+# senha_tamanho_minimo  = 8
+# senha_exige_maiuscula = false
+
 # Chave da API do Google Gemini (camada gratuita) para os insights por IA.
 # Vazio = insights só pelas regras. Prefira passar por variável de ambiente:
 #   TF_VAR_ia_api_key=...
@@ -132,8 +143,20 @@ email_remetente = ""
 # Simulador de telemetria (demonstração sem veículo rodando)
 # ----------------------------------------------------------------------------
 
-enable_simulador  = false
-simulador_cameras = 6
+enable_simulador  = true
+simulador_cameras = 16
+
+# ----------------------------------------------------------------------------
+# Aplicação e massa de demonstração
+# ----------------------------------------------------------------------------
+
+# O apply também faz o deploy do Backend e publica o dashboard
+# (precisa de ../Backend, ../Site e Node.js 22+).
+deploy_aplicacao = true
+
+# Meses de histórico fake no banco recém-criado. Para refazer depois:
+# scripts/injetar_dados.ps1 -Dias 180
+seed_dias_historico = 120
 
 # ----------------------------------------------------------------------------
 # Machine Learning

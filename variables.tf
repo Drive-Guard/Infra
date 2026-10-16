@@ -414,6 +414,34 @@ variable "criar_usuarios_demo" {
   default     = true
 }
 
+variable "usuario_teste" {
+  description = <<-EOT
+    Usuário de teste com senha escolhida por você (e-mail, nome, papel e
+    senha). Defina só no terraform.tfvars local, que não vai para o git. A
+    senha precisa obedecer à política abaixo.
+  EOT
+  type = object({
+    email = string
+    nome  = string
+    papel = string
+    senha = string
+  })
+  default   = null
+  sensitive = true
+}
+
+variable "senha_tamanho_minimo" {
+  description = "Tamanho mínimo das senhas do Cognito."
+  type        = number
+  default     = 10
+}
+
+variable "senha_exige_maiuscula" {
+  description = "Se as senhas do Cognito precisam de letra maiúscula."
+  type        = bool
+  default     = true
+}
+
 variable "backend_cors_extra_origins" {
   description = "Origens extras liberadas no CORS da API (além da URL da dashboard), para rodar o front local."
   type        = list(string)
@@ -444,13 +472,46 @@ variable "ia_api_key" {
 # ----------------------------------------------------------------------------
 
 variable "enable_simulador" {
-  description = "Liga a Lambda que simula as câmeras do seed enviando dados a cada minuto (demonstração)."
+  description = "Liga a Lambda que simula as câmeras do seed enviando dados a cada minuto (dados ao vivo na demonstração)."
   type        = bool
-  default     = false
+  default     = true
+}
+
+# ----------------------------------------------------------------------------
+# Aplicação (Backend e dashboard no próprio apply) e massa de demonstração
+# ----------------------------------------------------------------------------
+
+variable "deploy_aplicacao" {
+  description = "No apply, faz o deploy do Backend (osls) e publica o dashboard. Exige ../Backend, ../Site e Node.js 22+."
+  type        = bool
+  default     = true
+}
+
+variable "backend_dir" {
+  description = "Caminho do repositório Backend."
+  type        = string
+  default     = "../Backend"
+}
+
+variable "site_dir" {
+  description = "Caminho do dashboard (repositório Site)."
+  type        = string
+  default     = "../Site/driveguard-codigo"
+}
+
+variable "seed_dias_historico" {
+  description = "Dias de histórico fake gerados pelo seed (motoristas, turnos, leituras, alertas)."
+  type        = number
+  default     = 120
+
+  validation {
+    condition     = var.seed_dias_historico >= 7 && var.seed_dias_historico <= 400
+    error_message = "seed_dias_historico deve ficar entre 7 e 400."
+  }
 }
 
 variable "simulador_cameras" {
-  description = "Quantas câmeras do seed o simulador faz enviar."
+  description = "Quantas câmeras do seed o simulador faz enviar (16 = a frota inteira)."
   type        = number
-  default     = 6
+  default     = 16
 }

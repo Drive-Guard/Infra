@@ -185,6 +185,7 @@ module "etl" {
 
   prf_anos          = var.prf_anos
   load_prf_on_apply = var.load_prf_on_apply
+  seed_dias         = var.seed_dias_historico
 
   depends_on = [
     null_resource.build_lambdas,
@@ -222,8 +223,11 @@ module "dashboard" {
 module "auth" {
   source = "./modules/auth"
 
-  name_prefix         = local.name_prefix
-  criar_usuarios_demo = var.criar_usuarios_demo
+  name_prefix           = local.name_prefix
+  criar_usuarios_demo   = var.criar_usuarios_demo
+  usuario_teste         = var.usuario_teste
+  senha_tamanho_minimo  = var.senha_tamanho_minimo
+  senha_exige_maiuscula = var.senha_exige_maiuscula
 }
 
 locals {

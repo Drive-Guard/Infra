@@ -390,7 +390,7 @@ O `apply` executa, nesta ordem:
 3. cria os buckets e publica os `.sql` no bucket de artefatos;
 4. cria o RDS **(esta etapa leva 8–12 minutos)**;
 5. cria as Lambdas e o API Gateway;
-6. invoca `db-migrate`, que aplica `01` → `04`: schema, views, seed e primeira
+6. invoca `db-migrate`, que aplica `01` → `06`: schema, views, seed e primeira
    carga das MVs;
 7. sobe a EC2, que clona e builda o dashboard no `user_data`.
 
@@ -405,19 +405,62 @@ terraform output -raw db_connection_uri
 terraform output -json usuarios_demo     # login e senha dos usuários de demonstração
 ```
 
-### 6.5 Backend e dashboard
+### 6.5 Backend e dashboard: no mesmo `apply`
 
-O Terraform cria a API HTTP, o Cognito e os parâmetros que o backend lê do SSM.
-As rotas vêm do repositório [Drive-Guard/Backend](https://github.com/Drive-Guard/Backend)
-e o site do repositório Site:
+Com `deploy_aplicacao = true` (padrão), o `apply` também publica a aplicação
+(`app.tf`), então **um `terraform apply` deixa o TCC pronto para usar**:
+
+- `null_resource.deploy_backend` roda `scripts/deploy_backend.ps1` (ou `.sh`):
+  `npm ci`, build e `osls deploy` do repositório
+  [Drive-Guard/Backend](https://github.com/Drive-Guard/Backend) (Lambdas e rotas na API);
+- `null_resource.publicar_site` builda o dashboard (repositório Site) e publica no S3;
+  a EC2 pega a versão nova em até 1 minuto.
+
+Pré-requisitos: os repositórios clonados lado a lado (`../Backend` e
+`../Site/driveguard-codigo`, ajustáveis em `backend_dir` e `site_dir`) e Node.js 22+
+no `PATH`. Só a infraestrutura: `terraform apply -var deploy_aplicacao=false`.
+No `destroy`, o stack do backend é apagado antes da API.
+
+O simulador de frota (`enable_simulador = true`, padrão) mantém os turnos de agora
+recebendo leituras a cada minuto (ver "Dados de demonstração", na seção 8).
+
+### 6.6 Entrar no dashboard
 
 ```bash
-cd ../Backend && npm install && npm run deploy      # Lambdas + rotas na API (osls)
-cd ../Infra && ./scripts/publicar_site.ps1          # build do dashboard -> S3 -> EC2 em até 1 min
+terraform output -raw dashboard_url
+terraform output -json usuarios_demo     # admin, gestor e operador, com senha gerada
 ```
 
-Para ter dados ao vivo numa apresentação sem veículo rodando, ligue o simulador:
-`terraform apply -var enable_simulador=true`.
+Para ter um login fácil de digitar (banca, testes manuais), defina um usuário de teste
+no `terraform.tfvars` local, que não vai para o git:
+
+```hcl
+usuario_teste = {
+  email = "teste@driveguard.dev"
+  nome  = "Usuário de Teste"
+  papel = "admin"
+  senha = "a-senha-que-voce-quiser"
+}
+senha_tamanho_minimo  = 8      # política do Cognito (padrão 10)
+senha_exige_maiuscula = false  # padrão true
+```
+
+### 6.7 Credenciais novas do Learner Lab: subir tudo e injetar meses de dados
+
+O Learner Lab troca as credenciais a cada sessão e pode acabar os créditos. Para
+recomeçar numa conta nova (ou no dia da apresentação):
+
+```bash
+# 1. credenciais novas em ~/.aws/credentials
+terraform apply                       # sobe tudo, inclusive backend e dashboard
+./scripts/injetar_dados.ps1           # (ou .sh) 120 dias de operação simulada
+./scripts/injetar_dados.ps1 -Dias 180 # 6 meses
+```
+
+`injetar_dados` apaga a frota de demonstração e roda a simulação de novo,
+ancorada na data de hoje (os turnos "de agora" ficam atuais), atualiza as views Gold e
+pede uma rodada nova de insights. A base da PRF fica como está. Rode no dia da
+apresentação.
 
 ---
 
@@ -569,14 +612,37 @@ lida na hora, para o estado ao vivo.
 ### Dados de demonstração
 
 Com `seed_demo_data = true` (padrão), o banco nasce com 1 empresa (UUID fixo, o mesmo
-dos usuários de demonstração do Cognito), 16 motoristas (`DRV-1000`…), 16 veículos com
-câmera (uma delas com histórico de troca), 8 rotas com as BRs, viagens, 8 semanas de
-histórico e 12 turnos em andamento no momento do deploy. Acidentes **não** são
-inventados: vêm da base real da PRF, carregada no próprio `apply`.
+dos usuários do Cognito), 16 motoristas (`DRV-1000`…), 16 veículos com câmera (uma
+delas com histórico de troca), 8 rotas com as BRs e **meses de operação simulada**
+(`seed_dias_historico`, padrão 120 dias). Não são números soltos: o seed simula a
+frota dia a dia e cada tabela é consequência da anterior.
 
-O gerador reproduz o **pico da madrugada** e a **degradação com as horas de direção**,
-e o histórico antigo é um pouco mais cansado que o recente, para os comparativos
-contra o período anterior terem o que mostrar.
+- **Perfis**: suscetibilidade à fadiga por motorista, saída de madrugada (4
+  caminhoneiros de rota longa), à tarde (ônibus) ou de manhã, escala 5x2.
+- **Fadiga** = horas sem pausa × suscetibilidade + horas de turno + ritmo circadiano
+  (pico às 4h, queda depois do almoço) + dívida de sono + ruído com memória.
+  Estados em três níveis, como o modelo do repositório ML: alerta (< 40), fadiga
+  (40–70), sonolento (≥ 70); as features (EAR, PERCLOS, piscadas, bocejo, cabeça)
+  saem do score.
+- **Alertas** quando entra em sonolento (tipo pelo sinal dominante), mais distração e
+  perda de face.
+- **Fase piloto** (40% mais antigo: só o alarme na cabine) e **operação** (a central
+  atende os graves com pausa obrigatória, liga nos médios, encerra o turno no segundo
+  crítico; parada a cada 4h30). A pausa zera as horas sem pausa, então a fadiga cai
+  de verdade: a operação tem bem menos leituras sonolentas e alertas por dia.
+- **Acidentes da frota** pelo risco acumulado (cresce ao cubo acima de score 75):
+  acontecem onde houve detecção forte sem intervenção, quase sempre no piloto, e
+  interrompem o turno no ponto da rota onde o veículo está.
+- **ROI**: `acidentes_ano_frota` é a taxa anual da fase piloto calculada pela própria
+  simulação.
+
+A escala (saída, duração, folgas, paradas) é determinística pela data, e a Lambda
+simulador usa a mesma conta: o turno que o seed deixa aberto agora é o mesmo que o
+simulador continua, e as leituras param quando o turno acaba. Acidentes da PRF não
+são inventados: vêm da base real, carregada no próprio `apply`.
+
+Para conferir os números: `cd ../Backend && npx tsx scripts/estatisticas-seed.ts`
+(banco local) ou com `DATABASE_URL` apontando para outro banco.
 
 ---
 

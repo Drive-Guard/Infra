@@ -141,6 +141,12 @@ variable "sql_hash" {
   default     = ""
 }
 
+variable "seed_dias" {
+  description = "Dias de histórico gerados pelo seed."
+  type        = number
+  default     = 120
+}
+
 variable "prf_anos" {
   description = "Quantos anos mais recentes da base da PRF manter carregados."
   type        = number

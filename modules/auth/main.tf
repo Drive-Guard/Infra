@@ -27,9 +27,9 @@ resource "aws_cognito_user_pool" "this" {
   }
 
   password_policy {
-    minimum_length                   = 10
+    minimum_length                   = var.senha_tamanho_minimo
     require_lowercase                = true
-    require_uppercase                = true
+    require_uppercase                = var.senha_exige_maiuscula
     require_numbers                  = true
     require_symbols                  = false
     temporary_password_validity_days = 7
@@ -150,4 +150,36 @@ resource "aws_cognito_user_in_group" "demo" {
   user_pool_id = aws_cognito_user_pool.this.id
   group_name   = aws_cognito_user_group.papel[each.value.papel].name
   username     = aws_cognito_user.demo[each.key].username
+}
+
+# ----------------------------------------------------------------------------
+# Usuário de teste com senha escolhida por quem opera o ambiente
+#
+# Fica fora dos usuários de demonstração porque a senha não é gerada: vem do
+# terraform.tfvars local (que não vai para o git). Útil para a banca e para os
+# testes manuais, já que a senha é fácil de digitar.
+# ----------------------------------------------------------------------------
+
+resource "aws_cognito_user" "teste" {
+  count = var.usuario_teste == null ? 0 : 1
+
+  user_pool_id   = aws_cognito_user_pool.this.id
+  username       = var.usuario_teste.email
+  password       = var.usuario_teste.senha
+  message_action = "SUPPRESS"
+
+  attributes = {
+    email               = var.usuario_teste.email
+    email_verified      = "true"
+    name                = var.usuario_teste.nome
+    "custom:empresa_id" = var.empresa_demo_id
+  }
+}
+
+resource "aws_cognito_user_in_group" "teste" {
+  count = var.usuario_teste == null ? 0 : 1
+
+  user_pool_id = aws_cognito_user_pool.this.id
+  group_name   = aws_cognito_user_group.papel[var.usuario_teste.papel].name
+  username     = aws_cognito_user.teste[0].username
 }

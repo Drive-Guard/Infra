@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SITE_DIR="${1:-$REPO_ROOT/../Site/driveguard-codigo}"
 SEM_BUILD="${2:-}"
 
-BUCKET="$(terraform -chdir="$REPO_ROOT" output -raw artifacts_bucket)"
+BUCKET="${SITE_BUCKET:-$(terraform -chdir="$REPO_ROOT" output -raw artifacts_bucket)}"
 [ -n "$BUCKET" ] || { echo "Sem bucket de artefatos: rode terraform apply antes." >&2; exit 1; }
 
 if [ "$SEM_BUILD" != "--sem-build" ]; then
@@ -24,4 +24,4 @@ fi
 echo "==> Publicando em s3://$BUCKET/site/"
 aws s3 sync "$SITE_DIR/dist" "s3://$BUCKET/site/" --delete --exclude config.json --only-show-errors
 
-echo "==> Publicado. A EC2 pega a versão nova em até 1 minuto: $(terraform -chdir="$REPO_ROOT" output -raw dashboard_url)"
+echo "==> Publicado. A EC2 pega a versão nova em até 1 minuto: ${SITE_URL:-$(terraform -chdir="$REPO_ROOT" output -raw dashboard_url)}"

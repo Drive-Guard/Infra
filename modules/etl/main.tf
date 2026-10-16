@@ -278,6 +278,11 @@ resource "aws_lambda_function" "db_migrate" {
       ARTIFACTS_BUCKET = var.artifacts_bucket
       SQL_PREFIX       = "sql/"
       SEED_DEMO        = tostring(var.seed_demo_data)
+      SEED_DIAS        = tostring(var.seed_dias)
+      # O timeout do pg8000 vale para cada leitura do socket, não só para a
+      # conexão: o seed (a simulação de meses de operação) fica vários
+      # segundos sem resposta do banco. Abaixo do timeout da Lambda.
+      DB_CONNECT_TIMEOUT = "540"
     })
   }
 
@@ -300,6 +305,7 @@ resource "aws_lambda_invocation" "migrate" {
 
   input = jsonencode({
     seed = var.seed_demo_data
+    dias = var.seed_dias
   })
 
   # Reexecuta quando os scripts SQL mudarem.

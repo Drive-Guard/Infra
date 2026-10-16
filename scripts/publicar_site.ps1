@@ -15,13 +15,16 @@
 [CmdletBinding()]
 param(
     [string]$SiteDir = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "Site\driveguard-codigo"),
-    [switch]$SemBuild
+    [switch]$SemBuild,
+    # Passados pelo terraform apply (durante o apply não dá para ler o output).
+    [string]$Bucket = "",
+    [string]$Url = ""
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
-$bucket = (terraform -chdir="$RepoRoot" output -raw artifacts_bucket).Trim()
+$bucket = if ($Bucket) { $Bucket } else { (terraform -chdir="$RepoRoot" output -raw artifacts_bucket).Trim() }
 if (-not $bucket) { throw "Sem bucket de artefatos: rode terraform apply antes." }
 
 if (-not $SemBuild) {
@@ -40,5 +43,5 @@ Write-Host "==> Publicando em s3://$bucket/site/" -ForegroundColor Cyan
 aws s3 sync $dist "s3://$bucket/site/" --delete --exclude config.json --only-show-errors
 if ($LASTEXITCODE) { throw "aws s3 sync falhou" }
 
-$url = (terraform -chdir="$RepoRoot" output -raw dashboard_url).Trim()
+$url = if ($Url) { $Url } else { (terraform -chdir="$RepoRoot" output -raw dashboard_url).Trim() }
 Write-Host "==> Publicado. A EC2 pega a versão nova em até 1 minuto: $url" -ForegroundColor Green

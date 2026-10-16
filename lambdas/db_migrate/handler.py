@@ -12,6 +12,11 @@ o schema:
 Todos os scripts são idempotentes (CREATE IF NOT EXISTS, CREATE OR REPLACE,
 DROP ... CASCADE antes de recriar as views), então reexecutar é seguro.
 
+Para refazer a massa de demonstração (scripts/injetar_dados.*), o evento
+{"seed": true, "resemear": true, "dias": 180} apaga a frota (empresas, câmeras
+e tudo que depende delas) e roda o seed de novo com `dias` de histórico; a base
+da PRF fica.
+
 Cada arquivo roda numa transação própria: se o seed falhar, o schema já
 aplicado permanece.
 """
@@ -33,6 +38,7 @@ ARTIFACTS_BUCKET = os.environ["ARTIFACTS_BUCKET"]
 SQL_PREFIX = os.environ.get("SQL_PREFIX", "sql/")
 # Scripts cujo nome contém este marcador só rodam quando seed=true.
 SEED_MARKER = "seed"
+DIAS_PADRAO = int(os.environ.get("SEED_DIAS", "120"))
 
 
 def _listar_scripts():
@@ -67,12 +73,32 @@ def _executar(conn, key: str) -> dict:
 def handler(event, context):
     event = event or {}
     aplicar_seed = bool(event.get("seed", os.environ.get("SEED_DEMO", "false") == "true"))
+    dias = max(1, min(400, int(event.get("dias", DIAS_PADRAO))))
 
     try:
         conn = get_connection()
     except Exception:
         reset_connection()
         raise
+
+    cur = conn.cursor()
+    # O seed lê o tamanho do histórico desta configuração da sessão.
+    cur.execute("SELECT set_config('driveguard.dias_historico', %s, false)", (str(dias),))
+    if event.get("resemear"):
+        # DELETE (e não TRUNCATE) respeita o ON DELETE SET NULL dos acidentes
+        # da PRF, que não têm empresa e ficam.
+        cur.execute("""
+            DO $$ BEGIN
+                IF to_regclass('silver.dispositivos') IS NOT NULL THEN
+                    DELETE FROM silver.incidentes WHERE origem = 'interno';
+                    DELETE FROM silver.dispositivos;
+                    DELETE FROM silver.empresas;
+                END IF;
+            END $$;
+        """)
+        logger.info("Frota apagada para resemear com %d dias", dias)
+    conn.commit()
+    cur.close()
 
     scripts = _listar_scripts()
     if not scripts:
@@ -98,6 +124,8 @@ def handler(event, context):
         "ignorados": len([r for r in resultados if r["status"] == "ignorado"]),
         "erros": len(erros),
         "seed": aplicar_seed,
+        "dias_historico": dias,
+        "resemeado": bool(event.get("resemear")),
         "detalhes": resultados,
     }
 
