@@ -13,8 +13,12 @@
 # infraestrutura: -var deploy_aplicacao=false.
 #
 # No destroy, o stack CloudFormation do Backend é apagado ANTES da API (o
-# null_resource depende do módulo backend), então `terraform destroy` sozinho
-# também não deixa Lambdas órfãs.
+# null_resource remover_backend depende do módulo backend), então
+# `terraform destroy` sozinho também não deixa Lambdas órfãs.
+#
+# O state é compartilhado pelo grupo (S3), então os triggers não guardam nada
+# que mude de um computador para outro (caminhos absolutos, sistema): senão o
+# apply de cada colega refaria o deploy à toa.
 ###############################################################################
 
 locals {
@@ -34,27 +38,47 @@ locals {
   interpretador = local.is_windows ? ["PowerShell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"] : ["bash", "-c"]
 }
 
+# Código novo só atualiza o stack (osls deploy). Apagar o stack fica no
+# recurso de baixo, que só é destruído no destroy de verdade.
 resource "null_resource" "deploy_backend" {
   count = var.deploy_aplicacao ? 1 : 0
 
   triggers = {
-    codigo      = local.arquivos_backend
-    api         = module.backend.api_id
-    banco       = module.database.address
-    stack       = "${var.project_name}-backend-${var.environment}"
-    regiao      = local.region
-    windows     = tostring(local.is_windows)
-    backend_dir = local.backend_dir
-    stage       = var.environment
+    codigo = local.arquivos_backend
+    api    = module.backend.api_id
+    banco  = module.database.address
+    stage  = var.environment
   }
 
   provisioner "local-exec" {
     interpreter = local.interpretador
     command = (
       local.is_windows
-      ? "& '${abspath(path.module)}/scripts/deploy_backend.ps1' -BackendDir '${self.triggers.backend_dir}' -Stage '${self.triggers.stage}'"
-      : "'${abspath(path.module)}/scripts/deploy_backend.sh' '${self.triggers.backend_dir}' '${self.triggers.stage}'"
+      ? "& '${abspath(path.module)}/scripts/deploy_backend.ps1' -BackendDir '${local.backend_dir}' -Stage '${self.triggers.stage}'"
+      : "'${abspath(path.module)}/scripts/deploy_backend.sh' '${local.backend_dir}' '${self.triggers.stage}'"
     )
+  }
+
+  # A migração e o seed precisam ter rodado (o backend lê o banco no deploy
+  # não, mas as primeiras requisições sim), e o site depende da API pronta.
+  depends_on = [module.backend, module.etl, module.auth, null_resource.remover_backend]
+}
+
+# Só existe para o destroy: apaga o stack do Backend antes da API. O
+# provisioner de destroy só enxerga `self`, por isso stack e região ficam nos
+# triggers. `windows` é ignorado depois de criado: um colega em outro sistema
+# não deve recriar (e com isso apagar) o stack.
+resource "null_resource" "remover_backend" {
+  count = var.deploy_aplicacao ? 1 : 0
+
+  triggers = {
+    stack   = "${var.project_name}-backend-${var.environment}"
+    regiao  = local.region
+    windows = tostring(local.is_windows)
+  }
+
+  lifecycle {
+    ignore_changes = [triggers["windows"]]
   }
 
   provisioner "local-exec" {
@@ -67,9 +91,7 @@ resource "null_resource" "deploy_backend" {
     command = "aws cloudformation delete-stack --region ${self.triggers.regiao} --stack-name ${self.triggers.stack}; aws cloudformation wait stack-delete-complete --region ${self.triggers.regiao} --stack-name ${self.triggers.stack}"
   }
 
-  # A migração e o seed precisam ter rodado (o backend lê o banco no deploy
-  # não, mas as primeiras requisições sim), e o site depende da API pronta.
-  depends_on = [module.backend, module.etl, module.auth]
+  depends_on = [module.backend]
 }
 
 resource "null_resource" "publicar_site" {

@@ -618,6 +618,16 @@ if (Test-Path $StateLocal) {
 }
 Ok ("state em s3://$BUCKET_STATE/$CHAVE_STATE" + $(if ($migrar) { " (migrado)" } elseif ($remoto) { " (já existia)" } else { " (novo)" }))
 
+# Clone novo: sem build/, o Terraform não acha os pacotes das Lambdas (os
+# hashes do código não mudaram, então ele não refaria o build sozinho).
+$semBuild = @(Get-ChildItem -Directory (Join-Path $InfraDir "lambdas") |
+    Where-Object { $_.Name -notin @("common", "__pycache__") -and -not (Test-Path (Join-Path $InfraDir "build\$($_.Name)")) })
+if ($semBuild.Count -gt 0) {
+    Etapa "Empacotando as Lambdas (primeira vez nesta pasta)"
+    try { & (Join-Path $InfraDir "scripts\build_lambdas.ps1") -Python $EXE_python }
+    catch { Falhar "o build das Lambdas falhou: $($_.Exception.Message)" }
+}
+
 # ============================================================================
 # 6a. Desligar (opcional)
 # ============================================================================

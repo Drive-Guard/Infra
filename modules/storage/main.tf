@@ -238,16 +238,29 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 # comando precisa (script, SO, região) vai nos triggers.
 # ----------------------------------------------------------------------------
 
+#
+# CUIDADO: recriar este recurso roda o provisioner de destroy, ou seja,
+# ESVAZIA os buckets. Por isso os triggers não guardam nada que mude entre
+# computadores do grupo (o state é compartilhado): o script vai por caminho
+# relativo (o Terraform roda na raiz do Infra) e `windows` é ignorado depois
+# de criado.
+# ----------------------------------------------------------------------------
+
 locals {
   is_windows = !startswith(pathexpand("~"), "/")
-  script_esvaziar = abspath(
-    local.is_windows
-    ? "${path.module}/../../scripts/esvaziar_bucket.ps1"
-    : "${path.module}/../../scripts/esvaziar_bucket.sh"
-  )
 }
 
-resource "null_resource" "esvaziar" {
+# A versão anterior guardava o caminho absoluto do script. Sai do state sem
+# rodar o destroy (que esvaziaria os buckets).
+removed {
+  from = null_resource.esvaziar
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "null_resource" "esvaziar_bucket" {
   for_each = var.force_destroy ? {
     bronze    = awscc_s3_bucket.bronze.bucket_name
     artifacts = awscc_s3_bucket.artifacts.bucket_name
@@ -257,7 +270,10 @@ resource "null_resource" "esvaziar" {
     bucket  = each.value
     region  = var.region
     windows = tostring(local.is_windows)
-    script  = local.script_esvaziar
+  }
+
+  lifecycle {
+    ignore_changes = [triggers["windows"]]
   }
 
   provisioner "local-exec" {
@@ -269,8 +285,8 @@ resource "null_resource" "esvaziar" {
     )
     command = (
       self.triggers.windows == "true"
-      ? "& '${self.triggers.script}' -Bucket '${self.triggers.bucket}' -Regiao '${self.triggers.region}'"
-      : "'${self.triggers.script}' '${self.triggers.bucket}' '${self.triggers.region}'"
+      ? "& './scripts/esvaziar_bucket.ps1' -Bucket '${self.triggers.bucket}' -Regiao '${self.triggers.region}'"
+      : "./scripts/esvaziar_bucket.sh '${self.triggers.bucket}' '${self.triggers.region}'"
     )
   }
 }
