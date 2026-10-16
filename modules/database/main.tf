@@ -36,9 +36,12 @@ resource "aws_db_parameter_group" "this" {
   family      = var.parameter_group_family
   description = "Parametros do PostgreSQL do DriveGuard"
 
+  # Parâmetro estático: a AWS sempre o devolve como pending-reboot. Sem isto o
+  # plan mostraria uma mudança fantasma a cada apply.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   parameter {

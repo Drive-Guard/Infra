@@ -11,8 +11,37 @@ monitoramento.
 
 ---
 
+## Subir com um clique
+
+Num Windows 10/11, mesmo sem nada instalado:
+
+1. No AWS Academy, clique em **Start Lab** e espere a bolinha ficar verde.
+   Abra **AWS Details → AWS CLI: Show** e copie o bloco inteiro.
+2. Dê duplo clique em **`subir.cmd`**, na raiz deste repositório.
+
+Ele faz o resto sozinho, e rodar de novo é seguro:
+
+| Etapa | O que acontece |
+|---|---|
+| Ferramentas | baixa Terraform, Node.js, Python e AWS CLI em versões fixas, conferindo o SHA-256, para `%LOCALAPPDATA%\DriveGuard\ferramentas`. Também baixa Git e GitHub CLI se faltarem. Não instala nada no Windows e não pede administrador. |
+| Repositórios | clona (ou atualiza com `pull --ff-only`) o Backend e o Site ao lado do Infra. O Site é privado: se o computador ainda não tem login do GitHub, o script abre o login no navegador uma vez. |
+| Credenciais AWS | lê o bloco da área de transferência (ou pede para colar) e grava o `[default]` de `~/.aws/credentials`. Se a sessão do lab acabar no meio, ele pede o bloco novo e continua. |
+| Segredos | abre o cofre do grupo (`segredos/segredos.tfvars.enc`) e pede a senha. |
+| State | guarda o state no bucket `driveguard-tfstate-<conta>`, criado na conta do lab. Assim qualquer colega continua de onde o outro parou. Na primeira vez, leva o state local para lá. |
+| Apply | roda `terraform apply`, tenta de novo em erros passageiros e destrava o state se uma execução anterior caiu. No fim, abre o dashboard e mostra o login de teste. |
+
+**`desligar.cmd`** apaga tudo da conta e pede confirmação. O bucket do state
+fica, para o próximo `subir.cmd`. O registro de cada execução vai para
+`%LOCALAPPDATA%\DriveGuard\logs`. Para subir só a infraestrutura, sem Backend e
+sem dashboard: `scripts\subir.ps1 -SoInfra`.
+
+As seções abaixo explicam o mesmo passo a passo, feito à mão.
+
+---
+
 ## Índice
 
+0. [Subir com um clique](#subir-com-um-clique)
 1. [O que este repositório provisiona](#1-o-que-este-repositório-provisiona)
 2. [Fluxo de dados](#2-fluxo-de-dados)
 3. [Decisões de arquitetura](#3-decisões-de-arquitetura)
@@ -283,7 +312,8 @@ Infra/
 ├── outputs.tf               # endpoints, credenciais, comandos de teste
 ├── providers.tf / versions.tf
 ├── terraform.tfvars.example # copie para terraform.tfvars
-├── backend.tf.example       # backend S3 + lock DynamoDB (opcional)
+├── subir.cmd / desligar.cmd # um clique: sobe ou apaga tudo (scripts/subir.ps1)
+├── backend.tf.example       # backend S3 à mão (o subir.cmd gera o backend.tf sozinho)
 ├── Makefile                 # atalhos de operação
 │
 ├── modules/
@@ -351,8 +381,8 @@ aws_session_token=...
 ```
 
 > As credenciais **expiram quando a sessão do lab termina**. Se o `apply` falhar
-> com `ExpiredToken`, é só copiar o bloco novo e rodar de novo — o state local
-> continua válido.
+> com `ExpiredToken`, é só copiar o bloco novo e rodar de novo. O state continua
+> válido (o `subir.cmd` já faz isso sozinho).
 
 Confirme:
 
@@ -731,8 +761,8 @@ dois meses ligado direto. Como reduzir:
 
 | Ação | Windows | Linux/macOS/Git Bash | Tempo |
 |---|---|---|---|
-| **Ligar** | `terraform apply` | `make up` | ~15 min |
-| **Desligar** | `./scripts/desligar.ps1` | `make down` | ~15 min |
+| **Ligar** | `subir.cmd` (ou `terraform apply`) | `make up` | ~15 min |
+| **Desligar** | `desligar.cmd` (ou `./scripts/desligar.ps1`) | `make down` | ~15 min |
 | Conferir o que existe | — | `make custos` | segundos |
 
 Desligar **apaga tudo, inclusive o banco e os buckets**. Ao ligar de novo, o
@@ -835,8 +865,9 @@ O que a infraestrutura garante:
 | Permissões mínimas por serviço documentadas em código | `iam.tf` |
 
 **Atenção ao `terraform.tfstate`:** ele guarda a senha do RDS e a API Key em texto
-claro. O `.gitignore` já o exclui — não versione, e se for usar backend remoto,
-use o S3 com `encrypt = true` (veja `backend.tf.example`).
+claro. O `.gitignore` já o exclui, então não versione. O `subir.cmd` guarda o
+state no S3 da conta do lab, com `encrypt = true`, versionamento e acesso
+público bloqueado.
 
 ---
 
@@ -880,7 +911,7 @@ Com os defaults (`force_destroy_buckets = true`, `skip_final_snapshot = true`,
 `db_deletion_protection = false`), o destroy remove tudo, inclusive buckets com
 objetos dentro. Leva cerca de 10 minutos, quase tudo apagando o RDS.
 
-> Prefira `./scripts/desligar.ps1` (ou `make down`): além do destroy, ele
+> Prefira `desligar.cmd` (ou `./scripts/desligar.ps1`, `make down`): além do destroy, ele
 > confere que nada do projeto ficou cobrando na conta. Ver [seção 10](#10-ligar-e-desligar).
 
 ---

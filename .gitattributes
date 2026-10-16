@@ -1,7 +1,10 @@
-# Scripts de shell e o user_data da EC2 rodam em Linux: sempre LF, mesmo em
-# checkout no Windows (com CRLF o bash falha com "$'\r': command not found").
-*.sh     text eol=lf
-*.tftpl  text eol=lf
+# Finais de linha iguais em qualquer sistema. O Terraform calcula hashes dos
+# arquivos (SQL, Lambdas, código do Backend e do Site) para decidir o que
+# refazer: com CRLF no Windows e LF no Linux, o apply de cada colega recriaria
+# tudo. Só os .cmd ficam com CRLF, que o cmd.exe exige.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
 
 # Cofre de segredos: chega idêntico em qualquer sistema (sem conversão de linha).
-*.enc    -text
+*.enc -text

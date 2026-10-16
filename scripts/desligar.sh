@@ -78,7 +78,7 @@ checar "NAT Gateways" aws ec2 describe-nat-gateways --region "$REGIAO" \
 checar "Notebooks SageMaker" aws sagemaker list-notebook-instances --region "$REGIAO" --name-contains "$PREFIXO" \
   --query "NotebookInstances[?NotebookInstanceStatus!='Deleting'].NotebookInstanceName" --output text
 checar "Buckets S3" aws s3api list-buckets \
-  --query "Buckets[?starts_with(Name,'$PREFIXO')].Name" --output text
+  --query "Buckets[?starts_with(Name,'$PREFIXO') && !starts_with(Name,'$PREFIXO-tfstate')].Name" --output text
 checar "VPC" aws ec2 describe-vpcs --region "$REGIAO" --filters "Name=tag:Project,Values=DriveGuard" \
   --query "Vpcs[].VpcId" --output text
 checar "Lambdas" aws lambda list-functions --region "$REGIAO" \

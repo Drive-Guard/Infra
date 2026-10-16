@@ -110,8 +110,10 @@ Checar "Notebooks SageMaker" {
     aws sagemaker list-notebook-instances --region $Regiao --name-contains $Prefixo `
         --query "NotebookInstances[?NotebookInstanceStatus!='Deleting'].NotebookInstanceName" --output text
 }
-Checar "Buckets S3" {
-    aws s3api list-buckets --query "Buckets[?starts_with(Name,'$Prefixo')].Name" --output text
+# O bucket do state (driveguard-tfstate-<conta>) fica de propósito: guarda o
+# state vazio para o próximo subir e custa centavos.
+Checar "Buckets S3 (fora o do state)" {
+    aws s3api list-buckets --query "Buckets[?starts_with(Name,'$Prefixo') && !starts_with(Name,'$Prefixo-tfstate')].Name" --output text
 }
 Checar "VPC" {
     aws ec2 describe-vpcs --region $Regiao --filters "Name=tag:Project,Values=DriveGuard" `
@@ -141,7 +143,7 @@ Checar "Regras do EventBridge" {
 Write-Host ""
 if ($codigoDestroy -eq 0 -and $sobras.Count -eq 0) {
     Write-Host "==> Tudo destruido. Nada do DriveGuard cobrando na conta." -ForegroundColor Green
-    Write-Host "    Para ligar de novo: terraform apply"
+    Write-Host "    Para ligar de novo: subir.cmd (ou terraform apply)"
     Pop-Location
     exit 0
 }
