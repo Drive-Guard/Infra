@@ -40,10 +40,15 @@ monitoramento.
 | Ingestão | Lambda `ingest` | Grava o JSON cru no S3 Bronze |
 | Bronze | S3 versionado, cifrado, com lifecycle | Evento imutável e auditável |
 | Silver | Lambda `etl-silver` (gatilho S3) | Normaliza e carrega no PostgreSQL |
-| Silver/Gold | RDS PostgreSQL `db.t3.micro` | 12 tabelas OLTP + 7 MATERIALIZED VIEWs |
+| Silver/Gold | RDS PostgreSQL `db.t3.micro` | Tabelas da frota, cadastros e PRF + 11 MATERIALIZED VIEWs |
 | Gold | Lambda `etl-gold` + EventBridge (5 min) | `REFRESH MATERIALIZED VIEW CONCURRENTLY` |
 | Schema | Lambda `db-migrate` | Aplica o DDL e o seed no `apply` |
-| Apresentação | EC2 `t3.small` + Elastic IP + nginx | Hospeda o dashboard DriveGuard |
+| Base PRF | Lambda `prf-download` (fora da VPC) + EventBridge semanal | Baixa os acidentes da PRF e o IPCA para o Bronze |
+| Base PRF | Lambda `prf-carga` (VPC, gatilho S3) | Carrega a PRF no banco e atualiza as views `mv_prf_*` |
+| Login | Cognito (grupos admin, gestor, operador) | Autenticação da dashboard, empresa no token |
+| Backend | API HTTP + autorizador JWT + parâmetros no SSM | Recebe as rotas e Lambdas do repositório Backend |
+| Apresentação | EC2 `t3.micro` + Elastic IP + nginx | Serve o build estático do dashboard (sincronizado do S3) |
+| Demonstração | Lambda `simulador` + EventBridge (1 min) *(opcional)* | Faz o papel das câmeras do seed |
 | ML | SageMaker Notebook `ml.t3.medium` *(opcional)* | Treino dos modelos (XGBoost / YOLO) |
 | Observabilidade | CloudWatch (alarmes + dashboard), SNS, SQS DLQ | Monitora a cadeia inteira |
 
@@ -385,7 +390,7 @@ O `apply` executa, nesta ordem:
 3. cria os buckets e publica os `.sql` no bucket de artefatos;
 4. cria o RDS **(esta etapa leva 8–12 minutos)**;
 5. cria as Lambdas e o API Gateway;
-6. invoca `db-migrate`, que aplica `01` → `04`: schema, views, seed e primeira
+6. invoca `db-migrate`, que aplica `01` → `06`: schema, views, seed e primeira
    carga das MVs;
 7. sobe a EC2, que clona e builda o dashboard no `user_data`.
 
@@ -397,11 +402,78 @@ Tempo total típico: **12 a 18 minutos**, quase tudo esperando o RDS.
 terraform output resumo
 terraform output -raw api_key_value
 terraform output -raw db_connection_uri
+terraform output -json usuarios_demo     # login e senha dos usuários de demonstração
 ```
+
+### 6.5 Backend e dashboard: no mesmo `apply`
+
+Com `deploy_aplicacao = true` (padrão), o `apply` também publica a aplicação
+(`app.tf`), então **um `terraform apply` deixa o TCC pronto para usar**:
+
+- `null_resource.deploy_backend` roda `scripts/deploy_backend.ps1` (ou `.sh`):
+  `npm ci`, build e `osls deploy` do repositório
+  [Drive-Guard/Backend](https://github.com/Drive-Guard/Backend) (Lambdas e rotas na API);
+- `null_resource.publicar_site` builda o dashboard (repositório Site) e publica no S3;
+  a EC2 pega a versão nova em até 1 minuto.
+
+Pré-requisitos: os repositórios clonados lado a lado (`../Backend` e
+`../Site/driveguard-codigo`, ajustáveis em `backend_dir` e `site_dir`) e Node.js 22+
+no `PATH`. Só a infraestrutura: `terraform apply -var deploy_aplicacao=false`.
+No `destroy`, o stack do backend é apagado antes da API.
+
+O simulador de frota (`enable_simulador = true`, padrão) mantém os turnos de agora
+recebendo leituras a cada minuto (ver "Dados de demonstração", na seção 8).
+
+### 6.6 Entrar no dashboard
+
+```bash
+terraform output -raw dashboard_url
+terraform output -json usuarios_demo     # admin, gestor e operador, com senha gerada
+```
+
+Para ter um login fácil de digitar (banca, testes manuais), defina um usuário de teste
+no `terraform.tfvars` local, que não vai para o git:
+
+```hcl
+usuario_teste = {
+  email = "teste@driveguard.dev"
+  nome  = "Usuário de Teste"
+  papel = "admin"
+  senha = "a-senha-que-voce-quiser"
+}
+senha_tamanho_minimo  = 8      # política do Cognito (padrão 10)
+senha_exige_maiuscula = false  # padrão true
+```
+
+### 6.7 Credenciais novas do Learner Lab: subir tudo e injetar meses de dados
+
+O Learner Lab troca as credenciais a cada sessão e pode acabar os créditos. Para
+recomeçar numa conta nova (ou no dia da apresentação):
+
+```bash
+# 1. credenciais novas em ~/.aws/credentials
+terraform apply                       # sobe tudo, inclusive backend e dashboard
+./scripts/injetar_dados.ps1           # (ou .sh) um ano de operação simulada
+./scripts/injetar_dados.ps1 -Dias 180 # 6 meses
+```
+
+`injetar_dados` apaga a frota de demonstração e roda a simulação de novo,
+ancorada na data de hoje (os turnos "de agora" ficam atuais), atualiza as views Gold e
+pede uma rodada nova de insights. A base da PRF fica como está. Rode no dia da
+apresentação.
 
 ---
 
-## 7. Validando a esteira ponta a ponta
+## 7. Testes locais
+
+Os testes do ETL rodam contra um PostgreSQL 16 de verdade (o mesmo motor do RDS):
+
+```bash
+cd ../Backend && npm run db:local        # outro terminal: localhost:54329
+cd ../Infra && python -m pytest tests    # migrações, ETL Silver, PRF, simulador
+```
+
+## 7b. Validando a esteira ponta a ponta
 
 > Esta infraestrutura já foi aplicada de verdade num AWS Academy Learner Lab
 > (`us-east-1`, 92 recursos). O que foi confirmado rodando:
@@ -477,7 +549,8 @@ Esperado: `{"views_atualizadas": 7, ...}` com a duração de cada view.
 curl -I "$(terraform output -raw dashboard_url)"
 ```
 
-O build do dashboard leva alguns minutos após o `apply` terminar. Para acompanhar:
+Enquanto o site não for publicado (`scripts/publicar_site.*`), a EC2 mostra uma
+página de espera. Para acompanhar o bootstrap:
 
 ```bash
 aws ssm start-session --target "$(terraform output -raw dashboard_instance_id)"
@@ -501,58 +574,109 @@ s3://driveguard-dev-bronze-<sufixo>/eventos/dt=2026-03-14/hr=03/dg-edge-0001/<ts
 Cada objeto é um envelope com `ingest_id`, `ingest_timestamp`, IP de origem e o
 `payload` original intacto. A Silver pode ser reconstruída do zero a partir daqui.
 
-### Silver — `schema silver` (12 tabelas)
+### Silver — `schema silver`
 
-| Tabela | PK | Papel |
-|---|---|---|
-| `empresas` | UUID | Empresas de transporte |
-| `usuarios` | UUID | Contas do dashboard (gestor/operador/admin) |
-| `veiculos` | UUID | Frota; `placa_hash` é SHA-256 |
-| `motoristas` | UUID | `motorista_hash` é a chave natural vinda do edge |
-| `turnos` | UUID | Jornadas; `duracao_minutos` é coluna gerada |
-| `leituras_fadiga` | BIGSERIAL | **Granularidade máxima**: EAR, MAR, PERCLOS, blink rate, head pose, score, GPS |
-| `alertas` | UUID | Alertas disparados, com ciclo de reconhecimento |
-| `incidentes` | UUID | Acidentes da PRF (`origem='prf'`) e internos |
-| `acoes_motorista` | UUID | Intervenções do gestor |
-| `insights_motorista` | UUID | Insights por regra ou modelo |
-| `insights_frota` | UUID | Insights agregados da empresa |
-| `previsoes_fadiga` | UUID | Saída do modelo preditivo |
-
-Mais `ingestao_controle`, tabela técnica de idempotência do ETL.
-
-### Gold — `schema gold` (7 MATERIALIZED VIEWs)
-
-| View | Componente do dashboard |
+| Grupo | Tabelas |
 |---|---|
-| `mv_kpis_diarios` | KPIs principais (Visão Geral) |
-| `mv_incidentes_por_faixa_horaria` | Acidentes por faixa horária |
-| `mv_incidentes_por_causa_mes` | Causas dos acidentes |
-| `mv_fadiga_por_tempo_direcao` | Fadiga vs. Tempo de Direção |
-| `mv_hotspots_cidades` | Mapa do Brasil |
-| `mv_curva_fadiga_turno` | Evolução da Fadiga no Turno |
-| `mv_ranking_motoristas` | Lista de Motoristas + KPIs do Motorista |
+| Frota | `empresas`, `usuarios`, `veiculos`, `motoristas`, `turnos`, `leituras_fadiga`, `alertas`, `acoes_motorista` |
+| Cadastros | `dispositivos` (câmeras), `vinculos_dispositivo_veiculo` (histórico câmera ↔ caminhão), `rotas`, `viagens`, `dim_uf` |
+| ROI | `parametros_roi_padrao` (valor + fonte de cada número), `parametros_roi` (valores da empresa) |
+| IA e relatórios | `insights_frota`, `insights_motorista`, `insights_execucoes`, `relatorios_gerados`, `agendamentos_relatorio` |
+| PRF | `incidentes` (`origem='prf'` ou interna), `incidentes_veiculos`, `prf_veiculos_staging`, `prf_cargas` |
+| Controle | `ingestao_controle`, `previsoes_fadiga` |
 
-`mv_ranking_motoristas` e `mv_hotspots_cidades` classificam o risco na **mesma
-escala do front** (`riskFromScore` em `mockData.ts`): `low` < 35, `medium` < 60,
-`high` < 80, `critical` ≥ 80.
+O ETL Silver resolve a câmera pelo `device_id` e, pelo vínculo vigente na hora da
+leitura, o caminhão e a empresa. Câmera nunca vista entra como **pendente** para o
+gestor associar. O turno é casado com a viagem cadastrada para o caminhão, de onde
+vêm origem, destino e distância.
+
+### Gold — `schema gold` (11 MATERIALIZED VIEWs)
+
+Guardam **somas e contagens** (a API recompõe as médias), têm `empresa_id` e usam o
+fuso de Brasília.
+
+| View | Uso |
+|---|---|
+| `mv_kpis_diarios` | KPIs, evolução da fadiga, relatórios |
+| `mv_alertas_agregados` | Horário crítico, sinais detectados, alertas atendidos |
+| `mv_fadiga_por_tempo_direcao` | Tendência no turno, heatmap, fadiga × tempo de direção |
+| `mv_curva_fadiga_turno` | Curva do turno de cada motorista |
+| `mv_ranking_motoristas` | Lista e indicadores de 30 dias dos motoristas |
+| `mv_rotas_desempenho` | Rotas com maior incidência |
+| `mv_prf_faixa_horaria`, `mv_prf_causas_mes`, `mv_prf_hotspots`, `mv_prf_trechos`, `mv_prf_perfil_sono` | Base comparativa da PRF e parâmetros do ROI |
+
+As views da frota são atualizadas pela `etl-gold` a cada 5 minutos; as da PRF pela
+`prf-carga`, quando chega arquivo novo. `gold.vw_frota_agora` é uma view comum,
+lida na hora, para o estado ao vivo.
 
 ### Dados de demonstração
 
-Com `seed_demo_data = true` (padrão), o banco nasce com 1 empresa, 16 motoristas,
-16 veículos, 96 turnos, ~2.300 leituras, alertas correlacionados, ações do gestor,
-insights, previsões e 900 incidentes.
+Com `seed_demo_data = true` (padrão), o banco nasce com 1 empresa (UUID fixo, o mesmo
+dos usuários do Cognito), 16 motoristas (`DRV-1000`…), 16 veículos com câmera (uma
+delas com histórico de troca), 8 rotas com as BRs e **meses de operação simulada**
+(`seed_dias_historico`, padrão 365 dias). Não são números soltos: o seed simula a
+frota dia a dia e cada tabela é consequência da anterior.
 
-As features seguem as distribuições da literatura usada no TCC:
+- **Perfis**: suscetibilidade à fadiga por motorista, saída de madrugada (4
+  caminhoneiros de rota longa), à tarde (ônibus) ou de manhã, escala 5x2.
+- **Fadiga** = horas sem pausa × suscetibilidade + horas de turno + ritmo circadiano
+  (pico às 4h, queda depois do almoço) + dívida de sono + ruído com memória.
+  Estados em três níveis, como o modelo do repositório ML: alerta (< 40), fadiga
+  (40–70), sonolento (≥ 70); as features (EAR, PERCLOS, piscadas, bocejo, cabeça)
+  saem do score.
+- **Alertas** quando entra em sonolento (tipo pelo sinal dominante), mais distração e
+  perda de face.
+- **Três fases**, como uma implantação de verdade:
+  - **piloto** (primeiro quarto do ano): só o alarme na cabine;
+  - **central** (segundo quarto): a central atende os graves com pausa obrigatória,
+    liga nos médios, encerra o turno no segundo crítico; parada a cada 4h30;
+  - **programa** (metade recente): programa de gestão da fadiga depois dos acidentes:
+    madrugada limitada a 8 h com parada a cada 3h30, parada a cada 4 h para todos,
+    escala revisada e **treinamento individual** dos mais suscetíveis (a fadiga
+    deles cai nas semanas seguintes; a ação fica registrada e marcada como eficaz
+    quando a média dos 30 dias seguintes cai).
 
-| Estado | EAR | MAR | PERCLOS | Blink rate | Head pitch |
-|---|---|---|---|---|---|
-| alerta | ~0,31 | ~0,22 | ~0,08 | ~17/min | ~0° |
-| fadiga | ~0,24 | ~0,38 | ~0,28 | ~13/min | ~−8° |
-| sonolento | ~0,16 | ~0,51 | ~0,54 | ~8/min | ~−18° |
+  A pausa zera as horas sem pausa, então a fadiga cai de verdade fase a fase (na
+  simulação padrão, a média mensal sai de ~35 para ~25 e as leituras sonolentas de
+  ~7% para menos de 0,5%).
+- **Acidentes da frota** pelo risco acumulado (cresce ao cubo acima de score 75):
+  acontecem onde houve detecção forte sem intervenção, quase sempre no piloto, e
+  interrompem o turno no ponto da rota onde o veículo está. Há também acidentes sem
+  relação com sono (risco de base, maior com distração).
+- **Quase-acidentes** (ocorrência sem gravidade: saída de faixa, quase colisão) com
+  fadiga muito alta: bem mais comuns que os acidentes; na operação a central manda
+  parar em seguida.
+- **ROI**: `acidentes_ano_frota` é a taxa anual da fase piloto calculada pela própria
+  simulação.
 
-O gerador também reproduz o **pico circadiano da madrugada** (score +22 entre 0h e
-5h) e a **degradação com as horas de direção** — os dois padrões que as views Gold
-precisam evidenciar na banca.
+A escala (saída, duração, folgas, paradas) é determinística pela data, e a Lambda
+simulador usa a mesma conta, nas regras da fase atual: o turno que o seed deixa
+aberto agora é o mesmo que o simulador continua, e as leituras param quando o turno
+acaba.
+
+**Dados ao vivo (simulador):** a Lambda `simulador` é disparada pelo EventBridge a cada
+minuto e envia as leituras dos motoristas em turno para a API de ingestão real (daí
+em diante é o caminho de produção). Para ligar ou desligar sem Terraform:
+
+```bash
+./scripts/dados_ao_vivo.ps1             # (ou .sh status) estado atual
+./scripts/dados_ao_vivo.ps1 -Desligar   # (ou .sh desligar) só o histórico
+./scripts/dados_ao_vivo.ps1 -Ligar      # (ou .sh ligar)
+```
+
+O estado inicial vem de `dados_ao_vivo` (padrão `true`); o `apply` seguinte não desfaz
+a escolha feita pelo script. Desligado, o dashboard mostra o histórico e nada
+"dirigindo agora" (os turnos da hora da injeção somem do "ao vivo" em 30 minutos).
+
+**Fontes do ROI:** os custos por acidente são os do IPEA/PRF (2015, base dez/2014),
+os mais recentes publicados por gravidade para rodovias federais, corrigidos pelo
+IPCA até o último mês disponível (Banco Central, SGS 433), o mesmo método da
+atualização simplificada do próprio IPEA (2020). As proporções de gravidade e as
+mortes por acidente vêm da PRF (5 anos carregados, `prf_anos`). Acidentes da PRF não
+são inventados: vêm da base real, carregada no próprio `apply`.
+
+Para conferir os números: `cd ../Backend && npx tsx scripts/estatisticas-seed.ts`
+(banco local) ou com `DATABASE_URL` apontando para outro banco.
 
 ---
 
@@ -775,7 +899,8 @@ Coisas que este repositório **não** faz, e por quê:
 | Repositório | Conteúdo |
 |---|---|
 | [`Drive-Guard/Infra`](https://github.com/Drive-Guard/Infra) | Este repositório |
-| [`Drive-Guard/Site`](https://github.com/Drive-Guard/Site) | Dashboard (TanStack Start + React) |
+| [`Drive-Guard/Backend`](https://github.com/Drive-Guard/Backend) | API da dashboard e trabalhos agendados (TypeScript + osls) |
+| [`Drive-Guard/Site`](https://github.com/Drive-Guard/Site) | Dashboard (React, SPA estática) |
 | [`Drive-Guard/ML`](https://github.com/Drive-Guard/ML) | Detecção de sonolência e acidentes |
 | [`Drive-Guard/ETL`](https://github.com/Drive-Guard/ETL) | Tratamento dos dados abertos da PRF |
 

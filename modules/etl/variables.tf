@@ -140,3 +140,27 @@ variable "sql_hash" {
   type        = string
   default     = ""
 }
+
+variable "seed_dias" {
+  description = "Dias de histórico gerados pelo seed."
+  type        = number
+  default     = 365
+}
+
+variable "prf_anos" {
+  description = "Quantos anos mais recentes da base da PRF manter carregados."
+  type        = number
+  default     = 5
+}
+
+variable "prf_schedule" {
+  description = "Agendamento da atualização da base da PRF (UTC). Padrão: segunda, 06h UTC (03h em Brasília)."
+  type        = string
+  default     = "cron(0 6 ? * MON *)"
+}
+
+variable "load_prf_on_apply" {
+  description = "Baixa e carrega a base da PRF ao final do apply."
+  type        = bool
+  default     = true
+}

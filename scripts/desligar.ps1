@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Desliga o DriveGuard por completo: destrói tudo e confere que nada ficou.
 
@@ -14,6 +14,10 @@
     de "stop" deixou o ambiente ligado e consumiu US$30 do lab.
 
     Os dados NÃO são preservados. Banco e buckets são apagados.
+
+    Antes do destroy, apaga o stack CloudFormation do backend (rotas e
+    Lambdas que o repositório Backend publica na API criada aqui). Sem isso o
+    Terraform apagaria a API e deixaria as Lambdas do backend órfãs.
 
     Depois do destroy, o script consulta a conta e lista qualquer recurso do
     projeto que ainda exista. Sai com código 1 se encontrar algo.
@@ -35,17 +39,31 @@ Push-Location $RepoRoot
 Write-Host "==> DriveGuard: destruindo toda a infraestrutura" -ForegroundColor Cyan
 Write-Host "    Banco e buckets serao APAGADOS." -ForegroundColor DarkYellow
 
+# 1. Stack do backend (osls). Ele so pendura rotas e Lambdas na API do
+#    Terraform, entao sai primeiro.
+$stacks = aws cloudformation list-stacks --region $Regiao `
+    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE CREATE_FAILED UPDATE_FAILED DELETE_FAILED UPDATE_ROLLBACK_FAILED `
+    --query "StackSummaries[?starts_with(StackName,'$Prefixo-backend')].StackName" --output text 2>$null
+foreach ($stack in ("$stacks" -split "\s+" | Where-Object { $_ -and $_ -ne "None" })) {
+    Write-Host "--> Apagando o stack do backend: $stack"
+    aws cloudformation delete-stack --region $Regiao --stack-name $stack
+    aws cloudformation wait stack-delete-complete --region $Regiao --stack-name $stack
+}
+
+# 2. Todo o resto.
 terraform destroy -input=false -auto-approve -no-color
 $codigoDestroy = $LASTEXITCODE
 
 # A Lambda Gold pode disparar pelo EventBridge durante o destroy e recriar o
 # proprio log group depois que o Terraform o apagou. Custo desprezivel, mas
 # limpamos para nao deixar rastro.
-$orfaos = aws logs describe-log-groups --region $Regiao --log-group-name-prefix "/aws/lambda/$Prefixo" `
-    --query "logGroups[].logGroupName" --output text 2>$null
-foreach ($lg in ("$orfaos" -split "\s+" | Where-Object { $_ -and $_ -ne "None" })) {
-    aws logs delete-log-group --region $Regiao --log-group-name $lg 2>$null
-    Write-Host "    log group orfao removido: $lg"
+foreach ($prefixoLog in @("/aws/lambda/$Prefixo", "/aws/apigateway/$Prefixo")) {
+    $orfaos = aws logs describe-log-groups --region $Regiao --log-group-name-prefix $prefixoLog `
+        --query "logGroups[].logGroupName" --output text 2>$null
+    foreach ($lg in ("$orfaos" -split "\s+" | Where-Object { $_ -and $_ -ne "None" })) {
+        aws logs delete-log-group --region $Regiao --log-group-name $lg 2>$null
+        Write-Host "    log group orfao removido: $lg"
+    }
 }
 
 Write-Host ""
@@ -98,6 +116,26 @@ Checar "Buckets S3" {
 Checar "VPC" {
     aws ec2 describe-vpcs --region $Regiao --filters "Name=tag:Project,Values=DriveGuard" `
         --query "Vpcs[].VpcId" --output text
+}
+Checar "Lambdas" {
+    aws lambda list-functions --region $Regiao `
+        --query "Functions[?starts_with(FunctionName,'$Prefixo')].FunctionName" --output text
+}
+Checar "APIs HTTP (backend)" {
+    aws apigatewayv2 get-apis --region $Regiao `
+        --query "Items[?starts_with(Name,'$Prefixo')].[ApiId,Name]" --output text
+}
+Checar "Stacks CloudFormation do backend" {
+    aws cloudformation list-stacks --region $Regiao `
+        --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE CREATE_FAILED UPDATE_FAILED DELETE_FAILED DELETE_IN_PROGRESS `
+        --query "StackSummaries[?starts_with(StackName,'$Prefixo')].[StackName,StackStatus]" --output text
+}
+Checar "User pools do Cognito" {
+    aws cognito-idp list-user-pools --region $Regiao --max-results 60 `
+        --query "UserPools[?starts_with(Name,'$Prefixo')].[Id,Name]" --output text
+}
+Checar "Regras do EventBridge" {
+    aws events list-rules --region $Regiao --name-prefix $Prefixo --query "Rules[].Name" --output text
 }
 
 Write-Host ""

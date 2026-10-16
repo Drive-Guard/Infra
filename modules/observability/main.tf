@@ -5,6 +5,7 @@
 #   - Lambda de ingestão falhando  => o veículo perde telemetria
 #   - ETL Silver falhando          => a Bronze acumula sem virar Silver
 #   - ETL Gold falhando            => o dashboard congela nos números antigos
+#   - carga da PRF falhando        => a base comparativa fica desatualizada
 #   - DLQ com mensagem             => há lote perdido esperando reprocesso
 #   - RDS sem CPU/storage/memória  => o gargalo do db.t3.micro
 #   - EC2 com status check falhando=> dashboard fora do ar
@@ -31,11 +32,14 @@ resource "aws_sns_topic_subscription" "email" {
 locals {
   acoes = [aws_sns_topic.alarms.arn]
 
-  lambdas = {
-    ingest = var.ingest_function_name
-    silver = var.etl_silver_function_name
-    gold   = var.etl_gold_function_name
-  }
+  lambdas = merge(
+    {
+      ingest = var.ingest_function_name
+      silver = var.etl_silver_function_name
+      gold   = var.etl_gold_function_name
+    },
+    var.prf_carga_function_name != "" ? { prf = var.prf_carga_function_name } : {}
+  )
 }
 
 # ----------------------------------------------------------------------------

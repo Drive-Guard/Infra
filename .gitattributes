@@ -1,0 +1,4 @@
+# Scripts de shell e o user_data da EC2 rodam em Linux: sempre LF, mesmo em
+# checkout no Windows (com CRLF o bash falha com "$'\r': command not found").
+*.sh     text eol=lf
+*.tftpl  text eol=lf

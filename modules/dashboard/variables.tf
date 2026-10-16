@@ -3,11 +3,6 @@ variable "name_prefix" {
   type        = string
 }
 
-variable "project_name" {
-  description = "Nome do projeto (exibido na página de status)."
-  type        = string
-}
-
 variable "environment" {
   description = "Ambiente lógico."
   type        = string
@@ -21,7 +16,7 @@ variable "region" {
 variable "instance_type" {
   description = "Tipo da instância EC2."
   type        = string
-  default     = "t3.small"
+  default     = "t3.micro"
 }
 
 variable "subnet_id" {
@@ -51,18 +46,7 @@ variable "root_volume_gb" {
   default     = 20
 }
 
-variable "ssm_uri_parameter" {
-  description = "Caminho do SSM Parameter Store com a URI do banco."
+variable "site_bucket" {
+  description = "Bucket com o build do dashboard (prefixo site/) e o config.json (site-config/)."
   type        = string
-}
-
-variable "repo_url" {
-  description = "Repositório Git do dashboard."
-  type        = string
-}
-
-variable "repo_subdir" {
-  description = "Subdiretório do repositório com o package.json."
-  type        = string
-  default     = ""
 }

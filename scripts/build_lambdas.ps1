@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Empacota as Lambdas do DriveGuard em build/.
 
@@ -31,7 +31,7 @@ $CommonDir  = Join-Path $LambdasDir "common"
 $CaBundleUrl = "https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem"
 
 # Funções que abrem conexão com o RDS e por isso precisam de common/ + CA bundle.
-$FuncoesComBanco = @("etl_silver", "etl_gold", "db_migrate")
+$FuncoesComBanco = @("etl_silver", "etl_gold", "db_migrate", "prf_carga")
 
 Write-Host "==> Empacotando Lambdas do DriveGuard" -ForegroundColor Cyan
 

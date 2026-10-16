@@ -6,10 +6,16 @@
 #   build (pip)  ->  network  ->  storage  ->  database
 #                                     |            |
 #                                     +-> ingest   |
-#                                     +-------------> etl (migra o schema)
-#                                                  +-> dashboard
+#                                     +-------------> etl (migra o schema,
+#                                     |            |      carrega a PRF)
+#                                     |            +-> simulador (opcional)
+#                                     +-> dashboard (EC2 servindo o site)
+#   auth (Cognito) ------------------------> backend (API HTTP + SSM)
 #                                                  +-> ml (opcional)
 #                                                  +-> observability
+#
+# As rotas e Lambdas do backend não estão aqui: o repositório Drive-Guard/
+# Backend as publica (osls) na API criada pelo módulo backend.
 ###############################################################################
 
 locals {
@@ -177,6 +183,10 @@ module "etl" {
   seed_demo_data = var.seed_demo_data
   sql_hash       = local.sql_hash
 
+  prf_anos          = var.prf_anos
+  load_prf_on_apply = var.load_prf_on_apply
+  seed_dias         = var.seed_dias_historico
+
   depends_on = [
     null_resource.build_lambdas,
     module.storage,
@@ -192,10 +202,9 @@ module "dashboard" {
   source = "./modules/dashboard"
   count  = var.enable_dashboard ? 1 : 0
 
-  name_prefix  = local.name_prefix
-  project_name = var.project_name
-  environment  = var.environment
-  region       = local.region
+  name_prefix = local.name_prefix
+  environment = var.environment
+  region      = local.region
 
   instance_type         = var.dashboard_instance_type
   subnet_id             = module.network.public_subnet_ids[0]
@@ -204,9 +213,96 @@ module "dashboard" {
   key_pair_name         = var.dashboard_key_pair_name
   root_volume_gb        = var.dashboard_root_volume_gb
 
-  ssm_uri_parameter = module.database.ssm_uri_parameter
-  repo_url          = var.dashboard_repo_url
-  repo_subdir       = var.dashboard_repo_subdir
+  site_bucket = module.storage.artifacts_bucket_id
+}
+
+# -----------------------------------------------------------------------------
+# Login (Cognito) e API do backend
+# -----------------------------------------------------------------------------
+
+module "auth" {
+  source = "./modules/auth"
+
+  name_prefix           = local.name_prefix
+  criar_usuarios_demo   = var.criar_usuarios_demo
+  usuario_teste         = var.usuario_teste
+  senha_tamanho_minimo  = var.senha_tamanho_minimo
+  senha_exige_maiuscula = var.senha_exige_maiuscula
+}
+
+locals {
+  dashboard_url = var.enable_dashboard ? module.dashboard[0].url : ""
+}
+
+module "backend" {
+  source = "./modules/backend"
+
+  name_prefix = local.name_prefix
+
+  cognito_issuer       = module.auth.issuer
+  cognito_user_pool_id = module.auth.user_pool_id
+  cognito_client_id    = module.auth.client_id
+
+  cors_allow_origins = compact(concat([local.dashboard_url], var.backend_cors_extra_origins))
+  enable_access_logs = var.enable_apigw_access_logs
+  log_retention_days = var.lambda_log_retention_days
+
+  artifacts_bucket         = module.storage.artifacts_bucket_id
+  private_subnet_ids       = module.network.private_subnet_ids
+  lambda_security_group_id = module.network.lambda_security_group_id
+  lambda_role_arn          = local.lambda_role_arn
+
+  db_host     = module.database.address
+  db_port     = module.database.port
+  db_name     = module.database.db_name
+  db_username = module.database.username
+  db_password = module.database.password
+
+  site_url        = local.dashboard_url
+  email_remetente = var.email_remetente
+  ia_modelo       = var.ia_modelo
+  ia_api_key      = var.ia_api_key
+}
+
+# Configuração lida pela dashboard no navegador. Fica fora do build para o
+# mesmo build servir em qualquer ambiente; a EC2 a copia junto com o site.
+resource "aws_s3_object" "site_config" {
+  bucket        = module.storage.artifacts_bucket_id
+  key           = "site-config/config.json"
+  content_type  = "application/json"
+  cache_control = "no-store"
+
+  content = jsonencode({
+    ambiente = var.environment
+    apiUrl   = module.backend.api_url
+    cognito = {
+      regiao     = local.region
+      userPoolId = module.auth.user_pool_id
+      clientId   = module.auth.client_id
+    }
+  })
+}
+
+# -----------------------------------------------------------------------------
+# Simulador de telemetria (opcional, para demonstração)
+# -----------------------------------------------------------------------------
+
+module "simulador" {
+  source = "./modules/simulador"
+  count  = var.enable_simulador ? 1 : 0
+
+  name_prefix        = local.name_prefix
+  build_dir          = local.build_dir
+  lambda_role_arn    = local.lambda_role_arn
+  lambda_runtime     = var.lambda_runtime
+  ingest_url         = module.ingest.invoke_url
+  api_key            = module.ingest.api_key_value
+  cameras            = var.simulador_cameras
+  ativo              = var.dados_ao_vivo
+  log_retention_days = var.lambda_log_retention_days
+
+  # Os primeiros lotes precisam encontrar o schema já migrado.
+  depends_on = [module.etl]
 }
 
 # -----------------------------------------------------------------------------
@@ -239,6 +335,7 @@ module "observability" {
   ingest_function_name     = module.ingest.lambda_function_name
   etl_silver_function_name = module.etl.etl_silver_function_name
   etl_gold_function_name   = module.etl.etl_gold_function_name
+  prf_carga_function_name  = module.etl.prf_carga_function_name
   dlq_name                 = module.etl.dlq_name
 
   db_instance_id             = module.database.instance_id

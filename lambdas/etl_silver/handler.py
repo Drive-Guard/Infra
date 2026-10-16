@@ -4,10 +4,14 @@ Lambda ETL Silver — Bronze (S3) -> Silver (RDS PostgreSQL).
 Disparada por evento `s3:ObjectCreated:*` no bucket Bronze. Para cada objeto:
 
   1. lê o JSON cru;
-  2. resolve as chaves estrangeiras por hash (motorista, veículo, turno),
-     criando o registro quando ele ainda não existe;
-  3. insere as leituras e os alertas com ON CONFLICT DO NOTHING;
-  4. registra o arquivo em silver.ingestao_controle.
+  2. resolve a câmera pelo device_id e, pelo vínculo vigente na hora da
+     leitura, o caminhão e a empresa (a câmera que nunca foi cadastrada entra
+     como pendente, para o gestor associar a um veículo);
+  3. resolve o motorista pelo hash (o ID fixo gravado no dispositivo) e o
+     turno, casando o turno com a viagem cadastrada pelo gestor para aquele
+     caminhão, de onde vêm origem, destino e distância;
+  4. insere as leituras e os alertas com ON CONFLICT DO NOTHING;
+  5. registra o arquivo em silver.ingestao_controle.
 
 Idempotência em duas camadas: `silver.ingestao_controle` evita reprocessar o
 mesmo objeto, e as constraints UNIQUE (device_id, registrado_em) em
@@ -41,6 +45,19 @@ EMPRESA_PADRAO_NOME = os.environ.get("EMPRESA_PADRAO_NOME", "Empresa nao identif
 # tratado como tendo iniciado uma nova jornada.
 GAP_NOVO_TURNO_MINUTOS = int(os.environ.get("GAP_NOVO_TURNO_MINUTOS", "45"))
 
+# Folga para casar um turno com a viagem cadastrada: o caminhão pode sair
+# antes ou depois do horário previsto.
+JANELA_VIAGEM_HORAS = int(os.environ.get("JANELA_VIAGEM_HORAS", "3"))
+
+TIPOS_VEICULO = {"caminhao", "onibus", "van", "carro_app"}
+TIPOS_ALERTA = {
+    "sonolencia", "microssono", "bocejo_excessivo", "cabeca_baixa", "distracao",
+    "perda_de_face", "piscadas_excessivas", "fechamento_prolongado",
+}
+GRAVIDADES = {"baixa", "media", "alta", "critica"}
+
+_empresa_padrao_id = None
+
 
 def _parse_ts(valor):
     """Converte ISO-8601 (inclusive com sufixo Z) em datetime timezone-aware."""
@@ -63,31 +80,96 @@ def _ja_processado(cur, key: str) -> bool:
 
 def _empresa_padrao(cur) -> str:
     """
-    Empresa usada quando o lote não traz vínculo explícito.
+    Empresa provisória para telemetria que ainda não tem dono.
 
-    O edge envia apenas hashes; o cadastro de empresa/motorista é feito pelo
-    dashboard. Para não perder telemetria de um dispositivo ainda não
-    cadastrado, criamos um vínculo provisório que o gestor reconcilia depois.
+    Acontece com a câmera que começou a enviar antes de o gestor associá-la a
+    um caminhão. Os dados não se perdem: quando o motorista é cadastrado (ou a
+    câmera é associada), o registro passa para a empresa certa.
+    """
+    global _empresa_padrao_id
+    if _empresa_padrao_id is None:
+        cur.execute(
+            """
+            INSERT INTO silver.empresas (cnpj_hash, razao_social, nome_fantasia)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (cnpj_hash) DO UPDATE SET cnpj_hash = EXCLUDED.cnpj_hash
+            RETURNING id
+            """,
+            (EMPRESA_PADRAO_CNPJ_HASH, EMPRESA_PADRAO_NOME, EMPRESA_PADRAO_NOME),
+        )
+        _empresa_padrao_id = str(cur.fetchone()[0])
+    return _empresa_padrao_id
+
+
+def _resolver_dispositivo(cur, device_id, primeira_em, ultima_em) -> dict:
+    """
+    Câmera, caminhão e empresa do lote.
+
+    Vale o vínculo câmera-caminhão vigente na hora da primeira leitura. Se o
+    lote é anterior a qualquer vínculo (a câmera gravou offline antes de ser
+    cadastrada), usa o vínculo aberto. Câmera desconhecida é registrada como
+    pendente e aparece na tela de câmeras para o gestor associar.
     """
     cur.execute(
         """
-        INSERT INTO silver.empresas (cnpj_hash, razao_social, nome_fantasia)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (cnpj_hash) DO UPDATE SET atualizado_em = now()
-        RETURNING id
+        INSERT INTO silver.dispositivos (device_id, status, ultimo_contato_em)
+        VALUES (%s, 'pendente', %s)
+        ON CONFLICT (device_id) DO UPDATE
+           SET ultimo_contato_em = GREATEST(
+                   COALESCE(silver.dispositivos.ultimo_contato_em, EXCLUDED.ultimo_contato_em),
+                   EXCLUDED.ultimo_contato_em)
+        RETURNING id, empresa_id, status::text
         """,
-        (EMPRESA_PADRAO_CNPJ_HASH, EMPRESA_PADRAO_NOME, EMPRESA_PADRAO_NOME),
+        (device_id, ultima_em),
     )
-    return cur.fetchone()[0]
+    dispositivo_id, empresa_dispositivo, status = cur.fetchone()
 
-
-def _resolver_motorista(cur, empresa_id, motorista_hash, device_id) -> str:
     cur.execute(
-        "SELECT id FROM silver.motoristas WHERE motorista_hash = %s",
+        """
+        SELECT v.veiculo_id, ve.empresa_id, ve.tipo::text
+          FROM silver.vinculos_dispositivo_veiculo v
+          JOIN silver.veiculos ve ON ve.id = v.veiculo_id
+         WHERE v.dispositivo_id = %s
+           AND ((v.inicio <= %s AND (v.fim IS NULL OR v.fim > %s)) OR v.fim IS NULL)
+         ORDER BY (v.inicio <= %s AND (v.fim IS NULL OR v.fim > %s)) DESC, v.inicio DESC
+         LIMIT 1
+        """,
+        (dispositivo_id, primeira_em, primeira_em, primeira_em, primeira_em),
+    )
+    vinculo = cur.fetchone()
+
+    if status == "inativo":
+        logger.warning("Câmera %s está inativa no cadastro e enviou dados", device_id)
+
+    return {
+        "dispositivo_id": dispositivo_id,
+        "veiculo_id": vinculo[0] if vinculo else None,
+        "empresa_id": (vinculo[1] if vinculo else None) or empresa_dispositivo,
+        "tipo_veiculo": vinculo[2] if vinculo else None,
+        "pendente": status == "pendente",
+    }
+
+
+def _resolver_motorista(cur, empresa_id, motorista_hash) -> str:
+    """
+    Motorista pelo hash do ID gravado no dispositivo.
+
+    Um hash nunca visto vira "Motorista não cadastrado"; o gestor completa o
+    cadastro depois pelo código. Se o motorista estava na empresa provisória e
+    agora a câmera pertence a uma empresa de verdade, ele passa para ela.
+    """
+    padrao = _empresa_padrao(cur)
+    cur.execute(
+        "SELECT id, empresa_id FROM silver.motoristas WHERE motorista_hash = %s",
         (motorista_hash,),
     )
     row = cur.fetchone()
     if row:
+        if str(row[1]) == padrao and empresa_id and str(empresa_id) != padrao:
+            cur.execute(
+                "UPDATE silver.motoristas SET empresa_id = %s WHERE id = %s",
+                (empresa_id, row[0]),
+            )
         return row[0]
 
     cur.execute(
@@ -97,12 +179,13 @@ def _resolver_motorista(cur, empresa_id, motorista_hash, device_id) -> str:
         ON CONFLICT (motorista_hash) DO UPDATE SET atualizado_em = now()
         RETURNING id
         """,
-        (empresa_id, motorista_hash, f"Motorista {device_id}"),
+        (empresa_id or padrao, motorista_hash, f"Motorista não cadastrado ({motorista_hash[:6]})"),
     )
     return cur.fetchone()[0]
 
 
-def _resolver_veiculo(cur, empresa_id, veiculo_hash, tipo):
+def _resolver_veiculo_por_hash(cur, empresa_id, veiculo_hash, tipo):
+    """Caminho antigo: o dispositivo manda o hash da placa em vez de ter vínculo."""
     if not veiculo_hash:
         return None
 
@@ -111,7 +194,7 @@ def _resolver_veiculo(cur, empresa_id, veiculo_hash, tipo):
     if row:
         return row[0]
 
-    tipo_valido = tipo if tipo in ("caminhao", "onibus", "van", "carro_app") else "caminhao"
+    tipo_valido = tipo if tipo in TIPOS_VEICULO else "caminhao"
     cur.execute(
         """
         INSERT INTO silver.veiculos (empresa_id, placa_hash, tipo)
@@ -124,13 +207,105 @@ def _resolver_veiculo(cur, empresa_id, veiculo_hash, tipo):
     return cur.fetchone()[0]
 
 
-def _resolver_turno(cur, motorista_id, veiculo_id, device_id, primeira_leitura_em, turno_externo):
+def _vincular_viagem(cur, turno_id, veiculo_id, motorista_id, referencia):
+    """
+    Casa o turno com a viagem cadastrada para o caminhão naquele horário.
+
+    A viagem traz a rota (origem, destino, distância), que o turno copia para
+    as views da dashboard. A viagem planejada passa a "em andamento".
+    """
+    if not veiculo_id:
+        return None
+
+    cur.execute(
+        """
+        SELECT v.id, r.origem_cidade, r.origem_uf, r.destino_cidade, r.destino_uf, r.distancia_km
+          FROM silver.viagens v
+          JOIN silver.rotas r ON r.id = v.rota_id
+         WHERE v.veiculo_id = %s
+           AND v.status IN ('planejada', 'em_andamento')
+           AND %s BETWEEN v.partida_prevista - make_interval(hours => %s)
+                      AND COALESCE(v.chegada_prevista, v.partida_prevista + interval '24 hours')
+                          + make_interval(hours => %s)
+         ORDER BY (v.status = 'em_andamento') DESC,
+                  abs(extract(epoch FROM (v.partida_prevista - %s)))
+         LIMIT 1
+        """,
+        (veiculo_id, referencia, JANELA_VIAGEM_HORAS, JANELA_VIAGEM_HORAS, referencia),
+    )
+    viagem = cur.fetchone()
+    if not viagem:
+        return None
+
+    viagem_id, origem_cidade, origem_uf, destino_cidade, destino_uf, distancia = viagem
+    cur.execute(
+        """
+        UPDATE silver.turnos
+           SET viagem_id      = %s,
+               origem_cidade  = COALESCE(origem_cidade, %s),
+               origem_uf      = COALESCE(origem_uf, %s),
+               destino_cidade = COALESCE(destino_cidade, %s),
+               destino_uf     = COALESCE(destino_uf, %s),
+               distancia_km   = COALESCE(distancia_km, %s)
+         WHERE id = %s
+        """,
+        (viagem_id, origem_cidade, origem_uf, destino_cidade, destino_uf, distancia, turno_id),
+    )
+    cur.execute(
+        """
+        UPDATE silver.viagens
+           SET status       = 'em_andamento',
+               partida_real = COALESCE(partida_real, %s),
+               motorista_id = COALESCE(motorista_id, %s)
+         WHERE id = %s
+        """,
+        (referencia, motorista_id, viagem_id),
+    )
+    return viagem_id
+
+
+def _fechar_turno(cur, turno_id, finalizado_em):
+    """
+    Encerra o turno e, se ele fechou perto da chegada prevista, conclui a
+    viagem. Uma viagem longa pode ter vários turnos; só o último a conclui.
+    """
+    cur.execute(
+        """
+        UPDATE silver.turnos
+           SET status = 'concluido', finalizado_em = %s
+         WHERE id = %s
+        RETURNING viagem_id
+        """,
+        (finalizado_em, turno_id),
+    )
+    row = cur.fetchone()
+    if row and row[0]:
+        cur.execute(
+            """
+            UPDATE silver.viagens
+               SET status = 'concluida', chegada_real = %s
+             WHERE id = %s
+               AND status = 'em_andamento'
+               AND chegada_prevista IS NOT NULL
+               AND %s >= chegada_prevista - make_interval(hours => %s)
+            """,
+            (finalizado_em, row[0], finalizado_em, JANELA_VIAGEM_HORAS),
+        )
+
+
+def _resolver_turno(cur, motorista_id, veiculo_id, device_id, dispositivo_id,
+                    primeira_em, ultima_em, turno_externo):
     """
     Resolve o turno ao qual o lote pertence.
 
-    Se o edge mandou um turno_id conhecido, usa. Senão reaproveita o turno
-    aberto do motorista quando a última leitura é recente; caso contrário
-    fecha o anterior e abre um novo.
+    Ordem de decisão:
+      1. turno_id enviado pelo edge, se existir;
+      2. turno já encerrado que contém o lote (backlog que a câmera guardou
+         offline e mandou depois);
+      3. turno aberto do motorista, se a última leitura é recente e o caminhão
+         é o mesmo;
+      4. senão, encerra o aberto e abre um novo. Um lote anterior ao turno
+         aberto vira um turno já encerrado, para não bagunçar o atual.
     """
     if turno_externo:
         cur.execute("SELECT id FROM silver.turnos WHERE id = %s", (turno_externo,))
@@ -140,41 +315,78 @@ def _resolver_turno(cur, motorista_id, veiculo_id, device_id, primeira_leitura_e
 
     cur.execute(
         """
-        SELECT t.id,
-               COALESCE(MAX(l.registrado_em), t.iniciado_em) AS ultima
-        FROM silver.turnos t
-        LEFT JOIN silver.leituras_fadiga l ON l.turno_id = t.id
-        WHERE t.motorista_id = %s AND t.status = 'em_andamento'
-        GROUP BY t.id, t.iniciado_em
+        SELECT id FROM silver.turnos
+         WHERE motorista_id = %s
+           AND status <> 'em_andamento'
+           AND iniciado_em <= %s AND finalizado_em >= %s
+         ORDER BY iniciado_em DESC
+         LIMIT 1
         """,
-        (motorista_id,),
+        (motorista_id, primeira_em, primeira_em),
     )
     row = cur.fetchone()
-
     if row:
-        turno_id, ultima = row[0], row[1]
-        gap_min = (primeira_leitura_em - ultima).total_seconds() / 60.0
-        if gap_min <= GAP_NOVO_TURNO_MINUTOS:
-            return turno_id
-
-        cur.execute(
-            """
-            UPDATE silver.turnos
-               SET status = 'concluido', finalizado_em = %s
-             WHERE id = %s
-            """,
-            (ultima, turno_id),
-        )
+        return row[0]
 
     cur.execute(
         """
-        INSERT INTO silver.turnos (motorista_id, veiculo_id, device_id, iniciado_em, status)
-        VALUES (%s, %s, %s, %s, 'em_andamento')
+        SELECT t.id, t.iniciado_em, t.veiculo_id, t.viagem_id,
+               COALESCE(MAX(l.registrado_em), t.iniciado_em) AS ultima
+          FROM silver.turnos t
+          LEFT JOIN silver.leituras_fadiga l ON l.turno_id = t.id
+         WHERE t.motorista_id = %s AND t.status = 'em_andamento'
+         GROUP BY t.id, t.iniciado_em, t.veiculo_id, t.viagem_id
+        """,
+        (motorista_id,),
+    )
+    aberto = cur.fetchone()
+    status_novo = "em_andamento"
+
+    if aberto:
+        turno_id, iniciado_em, veiculo_turno, viagem_turno, ultima = aberto
+        mesmo_veiculo = veiculo_turno is None or veiculo_id is None or veiculo_turno == veiculo_id
+        gap_min = (primeira_em - ultima).total_seconds() / 60.0
+
+        if primeira_em < iniciado_em:
+            # Lote mais antigo que o turno aberto: vira um turno encerrado.
+            status_novo = "concluido"
+        elif mesmo_veiculo and gap_min <= GAP_NOVO_TURNO_MINUTOS:
+            if veiculo_turno is None and veiculo_id is not None:
+                # A câmera foi associada a um caminhão no meio do turno: o
+                # turno e o que já chegou dele passam a ser desse caminhão.
+                cur.execute(
+                    "UPDATE silver.turnos SET veiculo_id = %s, dispositivo_id = COALESCE(dispositivo_id, %s) WHERE id = %s",
+                    (veiculo_id, dispositivo_id, turno_id),
+                )
+                cur.execute(
+                    "UPDATE silver.leituras_fadiga SET veiculo_id = %s WHERE turno_id = %s AND veiculo_id IS NULL",
+                    (veiculo_id, turno_id),
+                )
+                cur.execute(
+                    "UPDATE silver.alertas SET veiculo_id = %s WHERE turno_id = %s AND veiculo_id IS NULL",
+                    (veiculo_id, turno_id),
+                )
+            if viagem_turno is None:
+                _vincular_viagem(cur, turno_id, veiculo_id, motorista_id, iniciado_em)
+            return turno_id
+        else:
+            _fechar_turno(cur, turno_id, ultima)
+
+    cur.execute(
+        """
+        INSERT INTO silver.turnos
+            (motorista_id, veiculo_id, device_id, dispositivo_id, iniciado_em, finalizado_em, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s::silver.status_turno)
         RETURNING id
         """,
-        (motorista_id, veiculo_id, device_id, primeira_leitura_em),
+        (
+            motorista_id, veiculo_id, device_id, dispositivo_id, primeira_em,
+            ultima_em if status_novo == "concluido" else None, status_novo,
+        ),
     )
-    return cur.fetchone()[0]
+    turno_id = cur.fetchone()[0]
+    _vincular_viagem(cur, turno_id, veiculo_id, motorista_id, primeira_em)
+    return turno_id
 
 
 def _inserir_leituras(cur, contexto, leituras, ingest_id, bronze_key) -> int:
@@ -241,14 +453,17 @@ def _inserir_alertas(cur, contexto, alertas) -> int:
         if disparado_em is None:
             continue
 
+        # Um tipo novo no edge não pode derrubar o lote inteiro: vira o genérico.
+        tipo = a.get("tipo") if a.get("tipo") in TIPOS_ALERTA else "sonolencia"
+        gravidade = a.get("gravidade") if a.get("gravidade") in GRAVIDADES else "media"
         linhas.append(
             (
                 contexto["turno_id"],
                 contexto["motorista_id"],
                 contexto["veiculo_id"],
                 disparado_em,
-                a.get("tipo", "sonolencia"),
-                a.get("gravidade", "media"),
+                tipo,
+                gravidade,
                 a.get("score_fadiga"),
                 a.get("mensagem"),
             )
@@ -281,6 +496,7 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
     ingest_id = envelope.get("ingest_id")
     leituras = payload.get("leituras") or []
     alertas = payload.get("alertas") or []
+    device_id = payload.get("device_id", "desconhecido")
 
     cur = conn.cursor()
     try:
@@ -288,25 +504,28 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
             logger.info("Objeto ja processado, ignorando: %s", key)
             return {"key": key, "status": "ignorado", "motivo": "ja processado"}
 
-        empresa_id = _empresa_padrao(cur)
-        motorista_id = _resolver_motorista(
-            cur, empresa_id, payload["motorista_hash"], payload.get("device_id", "desconhecido")
-        )
-        veiculo_id = _resolver_veiculo(
-            cur, empresa_id, payload.get("veiculo_hash"), payload.get("tipo_veiculo")
-        )
-
         timestamps = [_parse_ts(l.get("registrado_em")) for l in leituras]
         timestamps = [t for t in timestamps if t is not None]
         if not timestamps:
             raise ValueError("lote sem nenhuma leitura com registrado_em valido")
+        primeira_em, ultima_em = min(timestamps), max(timestamps)
+
+        disp = _resolver_dispositivo(cur, device_id, primeira_em, ultima_em)
+        empresa_id = disp["empresa_id"] or _empresa_padrao(cur)
+
+        motorista_id = _resolver_motorista(cur, empresa_id, payload["motorista_hash"])
+        veiculo_id = disp["veiculo_id"] or _resolver_veiculo_por_hash(
+            cur, empresa_id, payload.get("veiculo_hash"), payload.get("tipo_veiculo")
+        )
 
         turno_id = _resolver_turno(
             cur,
             motorista_id,
             veiculo_id,
-            payload.get("device_id", "desconhecido"),
-            min(timestamps),
+            device_id,
+            disp["dispositivo_id"],
+            primeira_em,
+            ultima_em,
             payload.get("turno_id"),
         )
 
@@ -314,7 +533,7 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
             "turno_id": turno_id,
             "motorista_id": motorista_id,
             "veiculo_id": veiculo_id,
-            "device_id": payload.get("device_id", "desconhecido"),
+            "device_id": device_id,
         }
 
         n_leituras = _inserir_leituras(cur, contexto, leituras, ingest_id, key)
@@ -338,8 +557,8 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
 
         conn.commit()
         logger.info(
-            "Silver atualizada: key=%s leituras=%d alertas=%d turno=%s",
-            key, n_leituras, n_alertas, turno_id,
+            "Silver atualizada: key=%s leituras=%d alertas=%d turno=%s camera_pendente=%s",
+            key, n_leituras, n_alertas, turno_id, disp["pendente"],
         )
         return {
             "key": key,
@@ -347,6 +566,8 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
             "leituras": n_leituras,
             "alertas": n_alertas,
             "turno_id": str(turno_id),
+            "veiculo_id": str(veiculo_id) if veiculo_id else None,
+            "camera_pendente": disp["pendente"],
         }
 
     except Exception as exc:
@@ -375,9 +596,25 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
             pass
 
 
+def _registros(event) -> list:
+    """
+    Aceita os dois formatos de evento do S3: a notificação clássica
+    (`Records`) e o evento "Object Created" entregue pelo EventBridge.
+    """
+    if event.get("Records"):
+        return [
+            (r["s3"]["bucket"]["name"], urllib.parse.unquote_plus(r["s3"]["object"]["key"]))
+            for r in event["Records"]
+        ]
+    detalhe = event.get("detail") or {}
+    if detalhe.get("bucket") and detalhe.get("object"):
+        return [(detalhe["bucket"]["name"], detalhe["object"]["key"])]
+    return []
+
+
 def handler(event, context):
-    registros = event.get("Records") or []
-    logger.info("Recebidos %d registros do S3", len(registros))
+    registros = _registros(event)
+    logger.info("Recebidos %d objetos do S3", len(registros))
 
     try:
         conn = get_connection()
@@ -388,10 +625,7 @@ def handler(event, context):
     resultados = []
     falhas = []
 
-    for registro in registros:
-        bucket = registro["s3"]["bucket"]["name"]
-        key = urllib.parse.unquote_plus(registro["s3"]["object"]["key"])
-
+    for bucket, key in registros:
         try:
             resultados.append(_processar_objeto(conn, bucket, key))
         except Exception as exc:

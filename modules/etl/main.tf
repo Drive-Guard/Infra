@@ -5,9 +5,14 @@
 #   EventBridge (5 min)          -> Lambda ETL Gold   --> REFRESH das MVs gold
 #   terraform apply              -> Lambda db_migrate --> aplica o DDL
 #
-# As três rodam em subnet privada porque precisam alcançar o RDS. Sem NAT
-# Gateway, elas chegam ao S3 pelo endpoint gateway e ao CloudWatch Logs pelo
-# endpoint de interface criados no módulo network.
+#   EventBridge (semanal) + apply -> Lambda prf_download (fora da VPC)
+#        baixa a base aberta da PRF e o IPCA -> S3 Bronze (prf/, referencias/)
+#   S3 Bronze --(ObjectCreated)--> Lambda prf_carga --> RDS + views mv_prf_*
+#
+# As que falam com o banco rodam em subnet privada. Sem NAT Gateway, elas
+# chegam ao S3 pelo endpoint gateway e ao CloudWatch Logs pelo endpoint de
+# interface criados no módulo network. A prf_download precisa da internet e
+# por isso roda fora da VPC; as duas trocam arquivos pelo S3.
 #
 # A senha do banco chega por variável de ambiente (criptografada em repouso
 # pela chave gerenciada da AWS para Lambda). Em produção o correto seria
@@ -19,6 +24,8 @@ locals {
   fn_silver  = "${var.name_prefix}-etl-silver"
   fn_gold    = "${var.name_prefix}-etl-gold"
   fn_migrate = "${var.name_prefix}-db-migrate"
+  fn_prf_dl  = "${var.name_prefix}-prf-download"
+  fn_prf     = "${var.name_prefix}-prf-carga"
 
   db_env = {
     DB_HOST     = var.db_host
@@ -27,6 +34,9 @@ locals {
     DB_USER     = var.db_username
     DB_PASSWORD = var.db_password
     LOG_LEVEL   = var.log_level
+    # O timeout do pg8000 vale para cada leitura do socket, não só para a
+    # conexão: refresh de views e espera da trava passam fácil de 10 s.
+    DB_CONNECT_TIMEOUT = "300"
   }
 
   vpc_subnets = var.private_subnet_ids
@@ -112,6 +122,8 @@ resource "aws_lambda_permission" "s3_invoke_silver" {
   source_account = var.account_id
 }
 
+# Um bucket só aceita uma configuração de notificação: os gatilhos das duas
+# cargas (telemetria e PRF) ficam juntos aqui, separados por prefixo.
 resource "aws_s3_bucket_notification" "bronze" {
   bucket = var.bronze_bucket
 
@@ -122,7 +134,24 @@ resource "aws_s3_bucket_notification" "bronze" {
     filter_suffix       = ".json"
   }
 
-  depends_on = [aws_lambda_permission.s3_invoke_silver]
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.prf_carga.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "prf/"
+    filter_suffix       = ".zip"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.prf_carga.arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "referencias/"
+    filter_suffix       = ".json"
+  }
+
+  depends_on = [
+    aws_lambda_permission.s3_invoke_silver,
+    aws_lambda_permission.s3_invoke_prf,
+  ]
 }
 
 # Reprocessa objetos que falharam mesmo depois das tentativas assíncronas.
@@ -239,7 +268,7 @@ resource "aws_lambda_function" "db_migrate" {
   filename         = data.archive_file.db_migrate.output_path
   source_code_hash = data.archive_file.db_migrate.output_base64sha256
 
-  timeout     = 600
+  timeout     = 900
   memory_size = 512
 
   vpc_config {
@@ -252,6 +281,11 @@ resource "aws_lambda_function" "db_migrate" {
       ARTIFACTS_BUCKET = var.artifacts_bucket
       SQL_PREFIX       = "sql/"
       SEED_DEMO        = tostring(var.seed_demo_data)
+      SEED_DIAS        = tostring(var.seed_dias)
+      # O timeout do pg8000 vale para cada leitura do socket, não só para a
+      # conexão: o seed (a simulação de um ano de operação) fica minutos sem
+      # resposta do banco. Abaixo do timeout da Lambda.
+      DB_CONNECT_TIMEOUT = "850"
     })
   }
 
@@ -274,6 +308,7 @@ resource "aws_lambda_invocation" "migrate" {
 
   input = jsonencode({
     seed = var.seed_demo_data
+    dias = var.seed_dias
   })
 
   # Reexecuta quando os scripts SQL mudarem.
@@ -284,5 +319,168 @@ resource "aws_lambda_invocation" "migrate" {
   depends_on = [
     aws_lambda_function.db_migrate,
     aws_cloudwatch_log_group.db_migrate,
+  ]
+}
+
+# ----------------------------------------------------------------------------
+# Base aberta da PRF
+#
+# prf_download: fora da VPC (precisa da internet). Lê a página de dados
+# abertos da PRF, baixa os arquivos dos anos mais recentes do Google Drive e
+# só regrava no Bronze o que mudou. Também busca o IPCA no Banco Central.
+#
+# prf_carga: dentro da VPC. Disparada pelo arquivo novo no Bronze, carrega no
+# banco e atualiza as views mv_prf_*.
+# ----------------------------------------------------------------------------
+
+data "archive_file" "prf_download" {
+  type        = "zip"
+  source_dir  = "${var.build_dir}/prf_download"
+  output_path = "${var.build_dir}/_zips/prf_download.zip"
+}
+
+resource "aws_cloudwatch_log_group" "prf_download" {
+  name              = "/aws/lambda/${local.fn_prf_dl}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_lambda_function" "prf_download" {
+  function_name = local.fn_prf_dl
+  description   = "Baixa a base aberta de acidentes da PRF e o IPCA para o Bronze"
+  role          = var.lambda_role_arn
+  handler       = "handler.handler"
+  runtime       = var.lambda_runtime
+  architectures = ["x86_64"]
+
+  filename         = data.archive_file.prf_download.output_path
+  source_code_hash = data.archive_file.prf_download.output_base64sha256
+
+  # Os zips somam ~13 MB por ano e vêm do Google Drive: folga para rede lenta.
+  timeout     = 900
+  memory_size = 1024
+
+  environment {
+    variables = {
+      BRONZE_BUCKET = var.bronze_bucket
+      PRF_ANOS      = tostring(var.prf_anos)
+      LOG_LEVEL     = var.log_level
+    }
+  }
+
+  tags = {
+    Name  = local.fn_prf_dl
+    Layer = "bronze"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.prf_download]
+}
+
+resource "aws_cloudwatch_event_rule" "prf_download" {
+  name                = "${var.name_prefix}-prf-semanal"
+  description         = "Atualiza a base da PRF uma vez por semana"
+  schedule_expression = var.prf_schedule
+  state               = "ENABLED"
+
+  tags = {
+    Name = "${var.name_prefix}-prf-semanal"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "prf_download" {
+  rule      = aws_cloudwatch_event_rule.prf_download.name
+  target_id = "lambda-prf-download"
+  arn       = aws_lambda_function.prf_download.arn
+}
+
+resource "aws_lambda_permission" "events_invoke_prf" {
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.prf_download.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.prf_download.arn
+}
+
+data "archive_file" "prf_carga" {
+  type        = "zip"
+  source_dir  = "${var.build_dir}/prf_carga"
+  output_path = "${var.build_dir}/_zips/prf_carga.zip"
+}
+
+resource "aws_cloudwatch_log_group" "prf_carga" {
+  name              = "/aws/lambda/${local.fn_prf}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_lambda_function" "prf_carga" {
+  function_name = local.fn_prf
+  description   = "Carrega a base da PRF no schema silver e atualiza as views mv_prf_*"
+  role          = var.lambda_role_arn
+  handler       = "handler.handler"
+  runtime       = var.lambda_runtime
+  architectures = ["x86_64"]
+
+  filename         = data.archive_file.prf_carga.output_path
+  source_code_hash = data.archive_file.prf_carga.output_base64sha256
+
+  # Um ano de pessoas tem ~120 mil veículos; o CSV é lido em fluxo e gravado
+  # com COPY. As cargas se enfileiram numa trava do banco, então a última de
+  # um lote pode esperar as anteriores.
+  timeout     = 900
+  memory_size = 1024
+
+  ephemeral_storage {
+    size = 1024
+  }
+
+  vpc_config {
+    subnet_ids         = local.vpc_subnets
+    security_group_ids = local.vpc_sgs
+  }
+
+  environment {
+    # Espera a trava enquanto outra carga roda (até ~14 min por arquivo).
+    variables = merge(local.db_env, { DB_CONNECT_TIMEOUT = "850" })
+  }
+
+  dead_letter_config {
+    target_arn = aws_sqs_queue.dlq.arn
+  }
+
+  tags = {
+    Name  = local.fn_prf
+    Layer = "silver"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.prf_carga]
+}
+
+resource "aws_lambda_permission" "s3_invoke_prf" {
+  statement_id   = "AllowS3Invoke"
+  action         = "lambda:InvokeFunction"
+  function_name  = aws_lambda_function.prf_carga.function_name
+  principal      = "s3.amazonaws.com"
+  source_arn     = var.bronze_bucket_arn
+  source_account = var.account_id
+}
+
+resource "aws_lambda_function_event_invoke_config" "prf_carga" {
+  function_name                = aws_lambda_function.prf_carga.function_name
+  maximum_retry_attempts       = 2
+  maximum_event_age_in_seconds = 3600
+}
+
+# Primeira carga no apply: sem ela a dashboard ficaria sem a base comparativa
+# até a primeira execução semanal. Roda depois da migração, para as tabelas
+# já existirem quando os arquivos chegarem ao Bronze e dispararem a carga.
+resource "aws_lambda_invocation" "prf_inicial" {
+  count = var.load_prf_on_apply ? 1 : 0
+
+  function_name = aws_lambda_function.prf_download.function_name
+  input         = jsonencode({ origem = "terraform-apply" })
+
+  depends_on = [
+    aws_lambda_invocation.migrate,
+    aws_s3_bucket_notification.bronze,
+    aws_lambda_function.prf_carga,
   ]
 }

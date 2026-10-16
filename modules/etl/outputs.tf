@@ -49,7 +49,24 @@ output "log_group_names" {
     aws_cloudwatch_log_group.etl_silver.name,
     aws_cloudwatch_log_group.etl_gold.name,
     aws_cloudwatch_log_group.db_migrate.name,
+    aws_cloudwatch_log_group.prf_download.name,
+    aws_cloudwatch_log_group.prf_carga.name,
   ]
+}
+
+output "prf_download_function_name" {
+  description = "Nome da Lambda que baixa a base da PRF."
+  value       = aws_lambda_function.prf_download.function_name
+}
+
+output "prf_carga_function_name" {
+  description = "Nome da Lambda que carrega a base da PRF no banco."
+  value       = aws_lambda_function.prf_carga.function_name
+}
+
+output "prf_carga_inicial" {
+  description = "Resposta da primeira execução da prf_download (no apply)."
+  value       = var.load_prf_on_apply ? try(jsondecode(aws_lambda_invocation.prf_inicial[0].result), null) : null
 }
 
 output "migration_result" {

@@ -307,9 +307,9 @@ variable "enable_dashboard" {
 }
 
 variable "dashboard_instance_type" {
-  description = "Tipo da instância EC2 do dashboard."
+  description = "Tipo da instância EC2 do dashboard (só serve arquivos estáticos)."
   type        = string
-  default     = "t3.small"
+  default     = "t3.micro"
 }
 
 variable "dashboard_key_pair_name" {
@@ -319,18 +319,6 @@ variable "dashboard_key_pair_name" {
   EOT
   type        = string
   default     = "vockey"
-}
-
-variable "dashboard_repo_url" {
-  description = "Repositório Git do dashboard clonado pelo user_data da EC2."
-  type        = string
-  default     = "https://github.com/Drive-Guard/Site.git"
-}
-
-variable "dashboard_repo_subdir" {
-  description = "Subdiretório do repositório onde está o package.json do dashboard."
-  type        = string
-  default     = "driveguard-codigo"
 }
 
 variable "dashboard_root_volume_gb" {
@@ -398,4 +386,142 @@ variable "force_destroy_buckets" {
   EOT
   type        = bool
   default     = true
+}
+
+# ----------------------------------------------------------------------------
+# Base da PRF
+# ----------------------------------------------------------------------------
+
+variable "prf_anos" {
+  description = "Quantos anos mais recentes da base de acidentes da PRF carregar (tendência anual e proporções de gravidade mais estáveis)."
+  type        = number
+  default     = 5
+}
+
+variable "load_prf_on_apply" {
+  description = "Baixa e carrega a base da PRF ao final do apply (senão, só na execução semanal)."
+  type        = bool
+  default     = true
+}
+
+# ----------------------------------------------------------------------------
+# Login e backend da dashboard
+# ----------------------------------------------------------------------------
+
+variable "criar_usuarios_demo" {
+  description = "Cria um usuário de demonstração por papel (admin, gestor, operador)."
+  type        = bool
+  default     = true
+}
+
+variable "usuario_teste" {
+  description = <<-EOT
+    Usuário de teste com senha escolhida por você (e-mail, nome, papel e
+    senha). Defina só no terraform.tfvars local, que não vai para o git. A
+    senha precisa obedecer à política abaixo.
+  EOT
+  type = object({
+    email = string
+    nome  = string
+    papel = string
+    senha = string
+  })
+  default   = null
+  sensitive = true
+}
+
+variable "senha_tamanho_minimo" {
+  description = "Tamanho mínimo das senhas do Cognito."
+  type        = number
+  default     = 10
+}
+
+variable "senha_exige_maiuscula" {
+  description = "Se as senhas do Cognito precisam de letra maiúscula."
+  type        = bool
+  default     = true
+}
+
+variable "backend_cors_extra_origins" {
+  description = "Origens extras liberadas no CORS da API (além da URL da dashboard), para rodar o front local."
+  type        = list(string)
+  default     = ["http://localhost:8080", "http://localhost:5173", "http://localhost:3000"]
+}
+
+variable "email_remetente" {
+  description = "Remetente verificado no SES para envio de relatórios. Vazio = relatório só por link (o Learner Lab bloqueia o SES)."
+  type        = string
+  default     = ""
+}
+
+variable "ia_modelo" {
+  description = "Modelos de IA dos insights (Google Gemini), separados por vírgula: o próximo é usado se o anterior falhar."
+  type        = string
+  default     = "gemini-3.6-flash,gemini-3.5-flash"
+}
+
+variable "ia_api_key" {
+  description = "Chave da API do Gemini. Vazio = insights gerados só pelas regras. Pode ser trocada depois no SSM."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# ----------------------------------------------------------------------------
+# Simulador de telemetria
+# ----------------------------------------------------------------------------
+
+variable "enable_simulador" {
+  description = "Cria a Lambda que simula as câmeras do seed enviando dados a cada minuto (dados ao vivo na demonstração)."
+  type        = bool
+  default     = true
+}
+
+variable "dados_ao_vivo" {
+  description = <<-EOT
+    Estado inicial do simulador (true = enviando a cada minuto). Depois do
+    apply, ligue e desligue com scripts/dados_ao_vivo.ps1 (ou .sh), sem
+    Terraform: o apply seguinte não desfaz a escolha.
+  EOT
+  type        = bool
+  default     = true
+}
+
+# ----------------------------------------------------------------------------
+# Aplicação (Backend e dashboard no próprio apply) e massa de demonstração
+# ----------------------------------------------------------------------------
+
+variable "deploy_aplicacao" {
+  description = "No apply, faz o deploy do Backend (osls) e publica o dashboard. Exige ../Backend, ../Site e Node.js 22+."
+  type        = bool
+  default     = true
+}
+
+variable "backend_dir" {
+  description = "Caminho do repositório Backend."
+  type        = string
+  default     = "../Backend"
+}
+
+variable "site_dir" {
+  description = "Caminho do dashboard (repositório Site)."
+  type        = string
+  default     = "../Site/driveguard-codigo"
+}
+
+variable "seed_dias_historico" {
+  description = "Dias de histórico gerados pela simulação do seed (turnos, leituras, alertas, ações, acidentes)."
+  type        = number
+  default     = 365
+
+  validation {
+    condition     = var.seed_dias_historico >= 7 && var.seed_dias_historico <= 400
+    error_message = "seed_dias_historico deve ficar entre 7 e 400."
+  }
+}
+
+variable "simulador_cameras" {
+  description = "Quantas câmeras do seed o simulador faz enviar (16 = a frota inteira)."
+  type        = number
+  default     = 16
 }

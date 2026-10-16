@@ -1,15 +1,18 @@
 """
 Lambda ETL Gold — atualiza as MATERIALIZED VIEWs da camada analítica.
 
-Disparada pelo EventBridge a cada 5 minutos. Lê a lista de views em
-gold.vw_materialized_views e roda um
+Disparada pelo EventBridge a cada 5 minutos. Lê a lista de views da frota
+em gold.vw_materialized_views e roda um
 `REFRESH MATERIALIZED VIEW CONCURRENTLY` por view.
+
+As views da base da PRF (grupo 'prf') ficam de fora: elas só mudam quando
+chega um arquivo novo da PRF, e quem as atualiza é a Lambda prf_carga.
 
 Dois detalhes que definem o desenho desta função:
 
 1. CONCURRENTLY mantém a view legível durante o refresh — sem ele o dashboard
    ficaria bloqueado a cada 5 minutos. Em troca exige índice UNIQUE em cada MV
-   (criados em sql/02_views_gold.sql) e é mais lento.
+   (criados em sql/04_views_gold.sql) e é mais lento.
 
 2. O PostgreSQL recusa REFRESH ... CONCURRENTLY dentro de um bloco de
    transação, e todo corpo de função plpgsql é um. Por isso o laço vive aqui,
@@ -24,13 +27,20 @@ import os
 import time
 
 import boto3
+from botocore.config import Config
 
 from db import get_connection, reset_connection
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-cloudwatch = boto3.client("cloudwatch")
+# A Lambda fica na VPC e só há VPC Endpoint para os Logs: sem NAT, a API de
+# métricas não responde. Timeout curto e sem novas tentativas, para a função
+# não ficar pendurada até o limite de 5 minutos (as views já foram atualizadas).
+cloudwatch = boto3.client(
+    "cloudwatch",
+    config=Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 1}),
+)
 
 METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "DriveGuard/ETL")
 # Teto por view: se uma agregação degradar, as outras ainda cabem na janela
@@ -42,7 +52,12 @@ def _listar_views(conn) -> list:
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT view_name, tem_indice_unico FROM gold.vw_materialized_views"
+            """
+            SELECT view_name, tem_indice_unico
+              FROM gold.vw_materialized_views
+             WHERE grupo = 'frota'
+             ORDER BY view_name
+            """
         )
         return [(row[0], bool(row[1])) for row in cur.fetchall()]
     finally:
@@ -142,7 +157,9 @@ def handler(event, context):
                     }
                 )
     finally:
-        conn.autocommit = False
+        # Conexão nova a cada execução: esta função alterna o autocommit, e uma
+        # conexão reaproveitada com transação aberta trava as views e o DDL.
+        reset_connection()
 
     _publicar_metricas(resultados)
 
