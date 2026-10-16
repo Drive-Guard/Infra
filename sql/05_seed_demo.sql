@@ -52,7 +52,8 @@
 --   motorista por alguns dias. Assim os acidentes por sono acontecem onde
 --   houve detecção forte sem intervenção, quase todos na fase piloto.
 -- * ROI: acidentes_ano_frota é a taxa anual esperada da fase piloto (a frota
---   sem a central), calculada pela própria simulação.
+--   sem a central) e fracao_sono_realista a parte dela ligada ao sono, as
+--   duas calculadas pela própria simulação.
 --
 -- É determinístico (setseed): rodar de novo gera o mesmo histórico, deslocado
 -- para a data de hoje.
@@ -197,6 +198,7 @@ DECLARE
     v_lambda_s  NUMERIC;
     v_lambda_o  NUMERIC;
     v_soma_piloto NUMERIC := 0;
+    v_soma_piloto_sono NUMERIC := 0;
     v_n_incid   INT := 0;
     v_r         NUMERIC;
     v_r2        NUMERIC;
@@ -555,7 +557,10 @@ BEGIN
                 -- base (maior com o olhar fora da estrada).
                 v_lambda_s := 0.02 * power(GREATEST(0, (v_score - 75) / 25.0), 3) * v_passo / 10.0;
                 v_lambda_o := 0.000018 * CASE WHEN v_distracao THEN 20 ELSE 1 END * v_passo / 10.0;
-                IF NOT v_operacao THEN v_soma_piloto := v_soma_piloto + v_lambda_s + v_lambda_o; END IF;
+                IF NOT v_operacao THEN
+                    v_soma_piloto := v_soma_piloto + v_lambda_s + v_lambda_o;
+                    v_soma_piloto_sono := v_soma_piloto_sono + v_lambda_s;
+                END IF;
                 v_acc_sono  := v_acc_sono + v_lambda_s;
                 v_acc_outro := v_acc_outro + v_lambda_o;
 
@@ -668,7 +673,12 @@ BEGIN
         (c_empresa, 'acidentes_ano_frota',
          GREATEST(1, ROUND(v_soma_piloto / GREATEST(1, v_dias - CEIL(v_dias * 0.6)) * 365, 1)),
          'Histórico da frota antes do DriveGuard (fase piloto da simulação de demonstração)'),
-        (c_empresa, 'horas_parada_por_acidente', 8, 'Informado pelo gestor (dados de demonstração)');
+        (c_empresa, 'horas_parada_por_acidente', 8, 'Informado pelo gestor (dados de demonstração)'),
+        -- Cenário realista com a fração de acidentes por sono da própria frota
+        -- (o conservador continua com a referência nacional da PRF).
+        (c_empresa, 'fracao_sono_realista',
+         ROUND(LEAST(0.9, GREATEST(0.06, v_soma_piloto_sono / NULLIF(v_soma_piloto, 0))), 3),
+         'Histórico de acidentes da frota: fração ligada ao sono na fase piloto (simulação de demonstração)');
 
     RAISE NOTICE 'Seed concluido: % acidentes simulados; taxa da fase piloto % por ano.',
         v_n_incid, ROUND(v_soma_piloto / GREATEST(1, v_dias - CEIL(v_dias * 0.6)) * 365, 1);

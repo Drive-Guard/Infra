@@ -35,10 +35,15 @@ $saida = Join-Path $tmp "saida.json"
 
 function Invocar([string]$Funcao, [string]$Json) {
     [System.IO.File]::WriteAllText($evento, $Json)
-    aws lambda invoke --region $Regiao --function-name $Funcao --cli-binary-format raw-in-base64-out `
-        --cli-read-timeout 900 --payload "fileb://$evento" $saida | Out-Null
-    if ($LASTEXITCODE) { throw "Falha ao invocar $Funcao" }
-    Get-Content $saida -Raw
+    # A etl-gold tem concorrência 1 e roda sozinha a cada 5 minutos: se estiver
+    # ocupada, espera e tenta de novo.
+    for ($tentativa = 1; $tentativa -le 6; $tentativa++) {
+        aws lambda invoke --region $Regiao --function-name $Funcao --cli-binary-format raw-in-base64-out `
+            --cli-read-timeout 900 --payload "fileb://$evento" $saida 2>$null | Out-Null
+        if (-not $LASTEXITCODE) { return Get-Content $saida -Raw }
+        Start-Sleep -Seconds 20
+    }
+    throw "Falha ao invocar $Funcao"
 }
 
 Write-Host "==> Gerando $Dias dias de histórico (pode levar alguns minutos)..." -ForegroundColor Cyan

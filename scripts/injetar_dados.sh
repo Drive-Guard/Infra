@@ -14,9 +14,16 @@ TMP="$(mktemp -d)"
 
 invocar() {
   printf '%s' "$2" > "$TMP/evento.json"
-  aws lambda invoke --region "$REGIAO" --function-name "$1" --cli-binary-format raw-in-base64-out \
-    --cli-read-timeout 900 --payload "fileb://$TMP/evento.json" "$TMP/saida.json" >/dev/null
-  cat "$TMP/saida.json"
+  # A etl-gold tem concorrência 1 e roda sozinha a cada 5 minutos: se estiver
+  # ocupada, espera e tenta de novo.
+  for _ in 1 2 3 4 5 6; do
+    if aws lambda invoke --region "$REGIAO" --function-name "$1" --cli-binary-format raw-in-base64-out \
+      --cli-read-timeout 900 --payload "fileb://$TMP/evento.json" "$TMP/saida.json" >/dev/null 2>&1; then
+      cat "$TMP/saida.json"; return 0
+    fi
+    sleep 20
+  done
+  echo "Falha ao invocar $1" >&2; return 1
 }
 
 echo "==> Gerando $DIAS dias de histórico (pode levar alguns minutos)..."

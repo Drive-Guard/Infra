@@ -27,13 +27,20 @@ import os
 import time
 
 import boto3
+from botocore.config import Config
 
 from db import get_connection, reset_connection
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-cloudwatch = boto3.client("cloudwatch")
+# A Lambda fica na VPC e só há VPC Endpoint para os Logs: sem NAT, a API de
+# métricas não responde. Timeout curto e sem novas tentativas, para a função
+# não ficar pendurada até o limite de 5 minutos (as views já foram atualizadas).
+cloudwatch = boto3.client(
+    "cloudwatch",
+    config=Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 1}),
+)
 
 METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "DriveGuard/ETL")
 # Teto por view: se uma agregação degradar, as outras ainda cabem na janela

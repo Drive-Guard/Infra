@@ -34,6 +34,9 @@ locals {
     DB_USER     = var.db_username
     DB_PASSWORD = var.db_password
     LOG_LEVEL   = var.log_level
+    # O timeout do pg8000 vale para cada leitura do socket, não só para a
+    # conexão: refresh de views e espera da trava passam fácil de 10 s.
+    DB_CONNECT_TIMEOUT = "300"
   }
 
   vpc_subnets = var.private_subnet_ids
@@ -435,7 +438,8 @@ resource "aws_lambda_function" "prf_carga" {
   }
 
   environment {
-    variables = local.db_env
+    # Espera a trava enquanto outra carga roda (até ~14 min por arquivo).
+    variables = merge(local.db_env, { DB_CONNECT_TIMEOUT = "850" })
   }
 
   dead_letter_config {

@@ -297,6 +297,12 @@ CREATE TABLE IF NOT EXISTS silver.insights_execucoes (
 CREATE INDEX IF NOT EXISTS ix_insights_execucoes_empresa
     ON silver.insights_execucoes (empresa_id, iniciado_em DESC);
 
+-- Período analisado ('AAAA-MM-DD..AAAA-MM-DD'): os insights seguem o filtro de
+-- período da dashboard, e cada período tem as suas rodadas.
+ALTER TABLE silver.insights_execucoes ADD COLUMN IF NOT EXISTS periodo TEXT;
+CREATE INDEX IF NOT EXISTS ix_insights_execucoes_periodo
+    ON silver.insights_execucoes (empresa_id, periodo, concluido_em DESC);
+
 -- 'recomendacao' (cards de insight) ou 'resumo' (resumo inteligente dos relatórios)
 ALTER TABLE silver.insights_frota ADD COLUMN IF NOT EXISTS categoria TEXT NOT NULL DEFAULT 'recomendacao';
 ALTER TABLE silver.insights_frota ADD COLUMN IF NOT EXISTS execucao_id UUID REFERENCES silver.insights_execucoes (id) ON DELETE SET NULL;

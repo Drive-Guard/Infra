@@ -47,7 +47,9 @@ HTML
 cat > /usr/local/bin/driveguard-site-sync <<SYNC
 #!/bin/bash
 set -uo pipefail
-aws s3 sync "s3://$BUCKET/site/" "$RAIZ/" --delete --exclude config.json \
+# --exact-timestamps: sem ele, o sync do S3 para o disco ignora arquivos do
+# mesmo tamanho, e o index.html novo (só muda o hash do JS) nunca seria copiado.
+aws s3 sync "s3://$BUCKET/site/" "$RAIZ/" --delete --exact-timestamps --exclude config.json \
     --only-show-errors --region "$REGIAO"
 aws s3 cp "s3://$BUCKET/site-config/config.json" "$RAIZ/config.json" \
     --only-show-errors --region "$REGIAO" || true
