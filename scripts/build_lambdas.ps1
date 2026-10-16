@@ -40,7 +40,10 @@ if (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {
 }
 
 # ---------------------------------------------------------------- CA bundle
-$CaCache = Join-Path $BuildDir "_cache"
+# O bundle fica versionado em lambdas/common: todo computador do grupo gera o
+# mesmo pacote (a AWS atualiza o arquivo de vez em quando, e um baixado em dia
+# diferente mudaria o hash das Lambdas a cada apply). Só baixa se faltar.
+$CaCache = $CommonDir
 $CaFile  = Join-Path $CaCache "rds-ca-bundle.pem"
 
 New-Item -ItemType Directory -Force -Path $CaCache | Out-Null

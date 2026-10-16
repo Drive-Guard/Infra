@@ -15,7 +15,8 @@ LAMBDAS_DIR="$REPO_ROOT/lambdas"
 BUILD_DIR="$REPO_ROOT/build"
 COMMON_DIR="$LAMBDAS_DIR/common"
 CA_BUNDLE_URL="https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem"
-CA_CACHE="$BUILD_DIR/_cache"
+# Versionado em lambdas/common (ver build_lambdas.ps1). Só baixa se faltar.
+CA_CACHE="$COMMON_DIR"
 CA_FILE="$CA_CACHE/rds-ca-bundle.pem"
 
 # Funções que abrem conexão com o RDS.
