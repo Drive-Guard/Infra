@@ -137,10 +137,12 @@ resource "aws_cognito_user" "demo" {
   message_action = "SUPPRESS"
 
   attributes = {
-    email               = each.value.email
-    email_verified      = "true"
-    name                = each.value.nome
-    "custom:empresa_id" = var.empresa_demo_id
+    email          = each.value.email
+    email_verified = "true"
+    name           = each.value.nome
+    # Atributo customizado vai sem o prefixo "custom:": o provider acrescenta.
+    # Com o prefixo, o apply seguinte não reconhece a chave e apaga o atributo.
+    empresa_id = var.empresa_demo_id
   }
 }
 
@@ -169,10 +171,12 @@ resource "aws_cognito_user" "teste" {
   message_action = "SUPPRESS"
 
   attributes = {
-    email               = var.usuario_teste.email
-    email_verified      = "true"
-    name                = var.usuario_teste.nome
-    "custom:empresa_id" = var.empresa_demo_id
+    email          = var.usuario_teste.email
+    email_verified = "true"
+    name           = var.usuario_teste.nome
+    # Atributo customizado vai sem o prefixo "custom:": o provider acrescenta.
+    # Com o prefixo, o apply seguinte não reconhece a chave e apaga o atributo.
+    empresa_id = var.empresa_demo_id
   }
 }
 

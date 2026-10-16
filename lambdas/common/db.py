@@ -79,6 +79,10 @@ def get_connection():
             cur = _connection.cursor()
             cur.execute("SELECT 1")
             cur.close()
+            # Com autocommit desligado, o SELECT abre uma transação implícita;
+            # sem fechar, a sessão ficaria "idle in transaction" segurando
+            # travas até o container morrer.
+            _connection.rollback()
             return _connection
         except Exception:
             logger.info("Conexao anterior invalida, reconectando.")

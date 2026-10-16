@@ -157,7 +157,9 @@ def handler(event, context):
                     }
                 )
     finally:
-        conn.autocommit = False
+        # Conexão nova a cada execução: esta função alterna o autocommit, e uma
+        # conexão reaproveitada com transação aberta trava as views e o DDL.
+        reset_connection()
 
     _publicar_metricas(resultados)
 

@@ -653,6 +653,12 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Último contato de cada câmera = a última leitura que ela enviou.
+    UPDATE silver.dispositivos d
+       SET ultimo_contato_em = x.ultima
+      FROM (SELECT device_id, MAX(registrado_em) AS ultima FROM silver.leituras_fadiga GROUP BY device_id) x
+     WHERE x.device_id = d.device_id AND d.status = 'ativo';
+
     -- ------------------------------------------------- eficácia das pausas
     -- Eficaz = nenhum alerta grave de sono na hora seguinte ao fim da pausa.
     UPDATE silver.acoes_motorista a

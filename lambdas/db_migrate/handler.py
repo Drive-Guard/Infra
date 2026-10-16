@@ -19,6 +19,13 @@ da PRF fica.
 
 Cada arquivo roda numa transação própria: se o seed falhar, o schema já
 aplicado permanece.
+
+O DDL precisa de trava exclusiva nas tabelas. Antes de começar, a função
+encerra sessões esquecidas ("idle in transaction" há mais de 2 minutos e
+migrações anteriores ainda esperando trava) e cada script roda com
+lock_timeout: se outra sessão segurar a tabela, falha em segundos dizendo
+quem bloqueia, em vez de esperar até o limite da Lambda. O evento
+{"diagnostico": true} só devolve as sessões abertas no banco.
 """
 
 import json
@@ -39,6 +46,42 @@ SQL_PREFIX = os.environ.get("SQL_PREFIX", "sql/")
 # Scripts cujo nome contém este marcador só rodam quando seed=true.
 SEED_MARKER = "seed"
 DIAS_PADRAO = int(os.environ.get("SEED_DIAS", "120"))
+LOCK_TIMEOUT = os.environ.get("MIGRATE_LOCK_TIMEOUT", "60s")
+
+_SESSOES_SQL = """
+    SELECT pid, application_name, state, wait_event_type,
+           EXTRACT(EPOCH FROM now() - COALESCE(xact_start, query_start))::int AS segundos,
+           LEFT(query, 160) AS consulta
+      FROM pg_stat_activity
+     WHERE datname = current_database() AND pid <> pg_backend_pid()
+     ORDER BY segundos DESC NULLS LAST
+"""
+
+
+def _sessoes(cur) -> list:
+    cur.execute(_SESSOES_SQL)
+    colunas = ["pid", "aplicacao", "estado", "espera", "segundos", "consulta"]
+    return [dict(zip(colunas, linha)) for linha in cur.fetchall()]
+
+
+def _encerrar_esquecidas(cur) -> list:
+    """Encerra transações abandonadas e migrações anteriores presas em trava."""
+    cur.execute(
+        """
+        SELECT pid, application_name, state, pg_terminate_backend(pid)
+          FROM pg_stat_activity
+         WHERE datname = current_database() AND pid <> pg_backend_pid()
+           AND (
+                (state = 'idle in transaction' AND xact_start < now() - interval '2 minutes')
+             OR (application_name = %s AND wait_event_type = 'Lock')
+           )
+        """,
+        (os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "driveguard-dev-db-migrate"),),
+    )
+    encerradas = [{"pid": r[0], "aplicacao": r[1], "estado": r[2]} for r in cur.fetchall()]
+    if encerradas:
+        logger.warning("Sessões encerradas antes da migração: %s", encerradas)
+    return encerradas
 
 
 def _listar_scripts():
@@ -56,6 +99,7 @@ def _executar(conn, key: str) -> dict:
 
     cur = conn.cursor()
     try:
+        cur.execute(f"SET lock_timeout = '{LOCK_TIMEOUT}'")
         # pg8000 envia o texto inteiro no protocolo simple query, que aceita
         # múltiplos statements separados por ';' — inclusive blocos DO $$.
         cur.execute(corpo)
@@ -65,7 +109,11 @@ def _executar(conn, key: str) -> dict:
     except Exception as exc:
         conn.rollback()
         logger.exception("Falha ao aplicar %s", key)
-        return {"script": key, "status": "erro", "erro": str(exc)[:2000]}
+        resultado = {"script": key, "status": "erro", "erro": str(exc)[:2000]}
+        if "lock timeout" in str(exc).lower() or "55P03" in str(exc):
+            # Quem está segurando a trava, para o erro já dizer o que fazer.
+            resultado["sessoes"] = _sessoes(cur)[:10]
+        return resultado
     finally:
         cur.close()
 
@@ -82,6 +130,13 @@ def handler(event, context):
         raise
 
     cur = conn.cursor()
+    if event.get("diagnostico"):
+        sessoes = _sessoes(cur)
+        conn.commit()
+        cur.close()
+        return {"sessoes": sessoes}
+
+    encerradas = _encerrar_esquecidas(cur)
     # O seed lê o tamanho do histórico desta configuração da sessão.
     cur.execute("SELECT set_config('driveguard.dias_historico', %s, false)", (str(dias),))
     if event.get("resemear"):
@@ -126,6 +181,7 @@ def handler(event, context):
         "seed": aplicar_seed,
         "dias_historico": dias,
         "resemeado": bool(event.get("resemear")),
+        "sessoes_encerradas": encerradas,
         "detalhes": resultados,
     }
 

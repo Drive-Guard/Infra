@@ -51,6 +51,13 @@ resource "aws_db_parameter_group" "this" {
     value = "1"
   }
 
+  # Rede de segurança: uma sessão esquecida com transação aberta segura travas
+  # e bloqueia ETL e migrações. O PostgreSQL a encerra depois de 5 minutos.
+  parameter {
+    name  = "idle_in_transaction_session_timeout"
+    value = "300000"
+  }
+
   lifecycle {
     create_before_destroy = true
   }
