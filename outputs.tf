@@ -1,10 +1,11 @@
 ###############################################################################
 # Outputs
 #
-# Valores sensíveis (API Key, senha do banco) não aparecem no terminal.
-# Para lê-los:
+# Valores sensíveis (API Key, senha do banco, senhas dos usuários de
+# demonstração) não aparecem no terminal. Para lê-los:
 #     terraform output -raw api_key_value
 #     terraform output -raw db_password
+#     terraform output -json usuarios_demo
 ###############################################################################
 
 # ----------------------------------------------------------------------------
@@ -20,6 +21,7 @@ output "resumo" {
     api_eventos          = module.ingest.eventos_endpoint
     api_health           = module.ingest.health_endpoint
     dashboard_url        = var.enable_dashboard ? module.dashboard[0].url : "desabilitado"
+    api_backend          = module.backend.api_url
     banco                = module.database.endpoint
     bucket_bronze        = module.storage.bronze_bucket_id
     bucket_artefatos     = module.storage.artifacts_bucket_id
@@ -141,7 +143,15 @@ output "lambdas" {
     etl_silver = module.etl.etl_silver_function_name
     etl_gold   = module.etl.etl_gold_function_name
     db_migrate = module.etl.db_migrate_function_name
+    prf_dl     = module.etl.prf_download_function_name
+    prf_carga  = module.etl.prf_carga_function_name
+    simulador  = var.enable_simulador ? module.simulador[0].function_name : "desligado"
   }
+}
+
+output "prf_carga_inicial" {
+  description = "Arquivos da PRF baixados no apply (a carga no banco segue de forma assíncrona)."
+  value       = module.etl.prf_carga_inicial
 }
 
 output "etl_dlq_url" {
@@ -190,4 +200,38 @@ output "sns_topic_alarmes" {
 output "cloudwatch_dashboard_name" {
   description = "Nome do dashboard do CloudWatch."
   value       = module.observability.dashboard_name
+}
+
+# ----------------------------------------------------------------------------
+# Login e backend da dashboard
+# ----------------------------------------------------------------------------
+
+output "backend_api_url" {
+  description = "URL da API do backend (as rotas são publicadas pelo repositório Backend)."
+  value       = module.backend.api_url
+}
+
+output "backend_ssm_prefix" {
+  description = "Prefixo dos parâmetros do SSM que o deploy do backend lê."
+  value       = module.backend.ssm_prefix
+}
+
+output "cognito" {
+  description = "Configuração do login (Cognito) usada pela dashboard."
+  value = {
+    user_pool_id = module.auth.user_pool_id
+    client_id    = module.auth.client_id
+    issuer       = module.auth.issuer
+  }
+}
+
+output "usuarios_demo" {
+  description = "Usuários de demonstração. Use `terraform output -json usuarios_demo`."
+  value       = module.auth.usuarios_demo
+  sensitive   = true
+}
+
+output "site_publicacao" {
+  description = "Onde publicar o build do dashboard (scripts/publicar_site.*)."
+  value       = "s3://${module.storage.artifacts_bucket_id}/site/"
 }

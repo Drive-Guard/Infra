@@ -307,9 +307,9 @@ variable "enable_dashboard" {
 }
 
 variable "dashboard_instance_type" {
-  description = "Tipo da instância EC2 do dashboard."
+  description = "Tipo da instância EC2 do dashboard (só serve arquivos estáticos)."
   type        = string
-  default     = "t3.small"
+  default     = "t3.micro"
 }
 
 variable "dashboard_key_pair_name" {
@@ -319,18 +319,6 @@ variable "dashboard_key_pair_name" {
   EOT
   type        = string
   default     = "vockey"
-}
-
-variable "dashboard_repo_url" {
-  description = "Repositório Git do dashboard clonado pelo user_data da EC2."
-  type        = string
-  default     = "https://github.com/Drive-Guard/Site.git"
-}
-
-variable "dashboard_repo_subdir" {
-  description = "Subdiretório do repositório onde está o package.json do dashboard."
-  type        = string
-  default     = "driveguard-codigo"
 }
 
 variable "dashboard_root_volume_gb" {
@@ -398,4 +386,71 @@ variable "force_destroy_buckets" {
   EOT
   type        = bool
   default     = true
+}
+
+# ----------------------------------------------------------------------------
+# Base da PRF
+# ----------------------------------------------------------------------------
+
+variable "prf_anos" {
+  description = "Quantos anos mais recentes da base de acidentes da PRF carregar."
+  type        = number
+  default     = 2
+}
+
+variable "load_prf_on_apply" {
+  description = "Baixa e carrega a base da PRF ao final do apply (senão, só na execução semanal)."
+  type        = bool
+  default     = true
+}
+
+# ----------------------------------------------------------------------------
+# Login e backend da dashboard
+# ----------------------------------------------------------------------------
+
+variable "criar_usuarios_demo" {
+  description = "Cria um usuário de demonstração por papel (admin, gestor, operador)."
+  type        = bool
+  default     = true
+}
+
+variable "backend_cors_extra_origins" {
+  description = "Origens extras liberadas no CORS da API (além da URL da dashboard), para rodar o front local."
+  type        = list(string)
+  default     = ["http://localhost:8080", "http://localhost:5173", "http://localhost:3000"]
+}
+
+variable "email_remetente" {
+  description = "Remetente verificado no SES para envio de relatórios. Vazio = relatório só por link (o Learner Lab bloqueia o SES)."
+  type        = string
+  default     = ""
+}
+
+variable "ia_modelo" {
+  description = "Modelo de IA dos insights (camada gratuita do Google Gemini)."
+  type        = string
+  default     = "gemini-2.5-flash"
+}
+
+variable "ia_api_key" {
+  description = "Chave da API do Gemini. Vazio = insights gerados só pelas regras. Pode ser trocada depois no SSM."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# ----------------------------------------------------------------------------
+# Simulador de telemetria
+# ----------------------------------------------------------------------------
+
+variable "enable_simulador" {
+  description = "Liga a Lambda que simula as câmeras do seed enviando dados a cada minuto (demonstração)."
+  type        = bool
+  default     = false
+}
+
+variable "simulador_cameras" {
+  description = "Quantas câmeras do seed o simulador faz enviar."
+  type        = number
+  default     = 6
 }

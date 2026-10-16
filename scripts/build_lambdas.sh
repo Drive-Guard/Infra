@@ -19,7 +19,7 @@ CA_CACHE="$BUILD_DIR/_cache"
 CA_FILE="$CA_CACHE/rds-ca-bundle.pem"
 
 # Funções que abrem conexão com o RDS.
-FUNCOES_COM_BANCO="etl_silver etl_gold db_migrate"
+FUNCOES_COM_BANCO="etl_silver etl_gold db_migrate prf_carga"
 
 echo "==> Empacotando Lambdas do DriveGuard"
 

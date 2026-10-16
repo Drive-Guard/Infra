@@ -29,6 +29,12 @@ variable "etl_gold_function_name" {
   type        = string
 }
 
+variable "prf_carga_function_name" {
+  description = "Nome da Lambda que carrega a base da PRF."
+  type        = string
+  default     = ""
+}
+
 variable "dlq_name" {
   description = "Nome da fila DLQ do ETL."
   type        = string
@@ -89,12 +95,11 @@ variable "gold_views" {
   type        = list(string)
   default = [
     "mv_kpis_diarios",
-    "mv_incidentes_por_faixa_horaria",
-    "mv_incidentes_por_causa_mes",
+    "mv_alertas_agregados",
     "mv_fadiga_por_tempo_direcao",
-    "mv_hotspots_cidades",
     "mv_curva_fadiga_turno",
     "mv_ranking_motoristas",
+    "mv_rotas_desempenho",
   ]
 }
 

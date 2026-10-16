@@ -1,8 +1,9 @@
 ###############################################################################
 # Módulo: dashboard
 #
-# EC2 em subnet pública hospedando o dashboard DriveGuard (TanStack Start /
-# Vite + React), atrás de nginx. O gestor de frota acessa pelo Elastic IP.
+# EC2 em subnet pública servindo o dashboard DriveGuard (SPA React) com
+# nginx. O build fica no bucket de artefatos (prefixo site/) e a instância o
+# sincroniza a cada minuto; o gestor de frota acessa pelo Elastic IP.
 #
 # O IP é elástico porque o Learner Lab para as instâncias ao fim de cada
 # sessão; sem EIP o endereço mudaria a cada retomada e o link entregue na
@@ -30,16 +31,10 @@ data "aws_ami" "al2023" {
 }
 
 locals {
-  app_port = 3000
-
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    project_name      = var.project_name
-    environment       = var.environment
-    region            = var.region
-    ssm_uri_parameter = var.ssm_uri_parameter
-    repo_url          = var.repo_url
-    repo_subdir       = var.repo_subdir
-    app_port          = local.app_port
+    environment = var.environment
+    region      = var.region
+    site_bucket = var.site_bucket
   })
 }
 

@@ -1,0 +1,3 @@
+# Driver PostgreSQL 100% Python puro: instalavel com pip --target em
+# qualquer SO, sem toolchain de compilacao. Ver lambdas/common/db.py.
+pg8000==1.31.2

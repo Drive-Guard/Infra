@@ -1,15 +1,18 @@
 """
 Lambda ETL Gold — atualiza as MATERIALIZED VIEWs da camada analítica.
 
-Disparada pelo EventBridge a cada 5 minutos. Lê a lista de views em
-gold.vw_materialized_views e roda um
+Disparada pelo EventBridge a cada 5 minutos. Lê a lista de views da frota
+em gold.vw_materialized_views e roda um
 `REFRESH MATERIALIZED VIEW CONCURRENTLY` por view.
+
+As views da base da PRF (grupo 'prf') ficam de fora: elas só mudam quando
+chega um arquivo novo da PRF, e quem as atualiza é a Lambda prf_carga.
 
 Dois detalhes que definem o desenho desta função:
 
 1. CONCURRENTLY mantém a view legível durante o refresh — sem ele o dashboard
    ficaria bloqueado a cada 5 minutos. Em troca exige índice UNIQUE em cada MV
-   (criados em sql/02_views_gold.sql) e é mais lento.
+   (criados em sql/04_views_gold.sql) e é mais lento.
 
 2. O PostgreSQL recusa REFRESH ... CONCURRENTLY dentro de um bloco de
    transação, e todo corpo de função plpgsql é um. Por isso o laço vive aqui,
@@ -42,7 +45,12 @@ def _listar_views(conn) -> list:
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT view_name, tem_indice_unico FROM gold.vw_materialized_views"
+            """
+            SELECT view_name, tem_indice_unico
+              FROM gold.vw_materialized_views
+             WHERE grupo = 'frota'
+             ORDER BY view_name
+            """
         )
         return [(row[0], bool(row[1])) for row in cur.fetchall()]
     finally:
