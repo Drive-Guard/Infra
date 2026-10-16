@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Gera de novo a massa de dados de demonstração (meses de histórico fake).
 
@@ -37,11 +37,20 @@ function Invocar([string]$Funcao, [string]$Json) {
     [System.IO.File]::WriteAllText($evento, $Json)
     # A etl-gold tem concorrência 1 e roda sozinha a cada 5 minutos: se estiver
     # ocupada, espera e tenta de novo.
-    for ($tentativa = 1; $tentativa -le 6; $tentativa++) {
-        aws lambda invoke --region $Regiao --function-name $Funcao --cli-binary-format raw-in-base64-out `
-            --cli-read-timeout 900 --payload "fileb://$evento" $saida 2>$null | Out-Null
-        if (-not $LASTEXITCODE) { return Get-Content $saida -Raw }
-        Start-Sleep -Seconds 20
+    # No PowerShell 5.1, stderr de comando nativo com ErrorActionPreference=Stop
+    # vira erro fatal: durante as tentativas o erro é só lido no código de saída.
+    $anterior = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        for ($tentativa = 1; $tentativa -le 6; $tentativa++) {
+            aws lambda invoke --region $Regiao --function-name $Funcao --cli-binary-format raw-in-base64-out `
+                --cli-read-timeout 900 --payload "fileb://$evento" $saida *> $null
+            if (-not $LASTEXITCODE) { return Get-Content $saida -Raw }
+            Write-Host "    $Funcao ocupada ou indisponível; nova tentativa em 20 s ($tentativa/6)" -ForegroundColor Yellow
+            Start-Sleep -Seconds 20
+        }
+    } finally {
+        $ErrorActionPreference = $anterior
     }
     throw "Falha ao invocar $Funcao"
 }

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Builda o dashboard (repositório Site) e publica no bucket de artefatos.
 

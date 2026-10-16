@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Apaga TODAS as versões e marcadores de exclusão de um bucket S3.
 

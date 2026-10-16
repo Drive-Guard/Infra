@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Empacota as Lambdas do DriveGuard em build/.
 

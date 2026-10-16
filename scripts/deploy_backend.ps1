@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Faz o deploy do repositório Backend (osls) na API criada pelo Terraform.
 

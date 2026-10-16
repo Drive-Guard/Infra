@@ -32,14 +32,19 @@ SET search_path TO gold, silver, public;
 -- Funções auxiliares
 -- -----------------------------------------------------------------------------
 
--- Mesma escala do front (riskFromScore em mockData.ts).
+-- Escala de risco = estados do modelo (repositório ML) e gravidade dos alertas:
+--   baixo   < 40  (alerta)
+--   médio   40-70 (fadiga)
+--   alto    70-90 (sonolento: é o "em risco" de todas as telas)
+--   crítico >= 90 (mesmo corte do alerta crítico)
+-- A mesma escala está no backend (lib/numeros.ts) e no front (lib/risco.ts).
 CREATE OR REPLACE FUNCTION gold.fn_nivel_risco(p_score NUMERIC)
 RETURNS TEXT AS $$
     SELECT CASE
         WHEN p_score IS NULL THEN 'sem_dados'
-        WHEN p_score < 35    THEN 'low'
-        WHEN p_score < 60    THEN 'medium'
-        WHEN p_score < 80    THEN 'high'
+        WHEN p_score < 40    THEN 'low'
+        WHEN p_score < 70    THEN 'medium'
+        WHEN p_score < 90    THEN 'high'
         ELSE 'critical'
     END;
 $$ LANGUAGE sql IMMUTABLE;
@@ -80,7 +85,7 @@ WITH agg_leituras AS (
         COUNT(*) FILTER (WHERE l.estado = 'sonolento') AS leituras_sonolento,
         COUNT(*) FILTER (WHERE l.estado = 'fadiga')    AS leituras_fadiga,
         COUNT(DISTINCT l.motorista_id)                 AS motoristas_monitorados,
-        COUNT(DISTINCT l.motorista_id) FILTER (WHERE l.score_fadiga >= 80) AS motoristas_risco_critico
+        COUNT(DISTINCT l.motorista_id) FILTER (WHERE l.score_fadiga >= 90) AS motoristas_risco_critico
     FROM silver.leituras_fadiga l
     JOIN silver.motoristas m ON m.id = l.motorista_id
     LEFT JOIN silver.veiculos v ON v.id = l.veiculo_id
@@ -186,12 +191,13 @@ SELECT
     a.tipo::TEXT                                     AS tipo,
     a.gravidade::TEXT                                AS gravidade,
     COUNT(*)                                         AS total,
-    -- Atendido = teve uma ação de pausa, troca ou encerramento registrada.
-    -- É o indicador operacional que aparece ao lado do ROI.
+    -- Atendido = a central respondeu ao alerta com uma ação registrada (pausa,
+    -- contato, troca ou encerramento). Definição única do ROI, dos relatórios
+    -- e dos insights; o percentual é sempre sobre os alertas graves.
     COUNT(*) FILTER (WHERE EXISTS (
         SELECT 1 FROM silver.acoes_motorista ac
         WHERE ac.alerta_id = a.id
-          AND ac.tipo IN ('pausa_obrigatoria', 'encerramento_turno', 'troca_motorista')
+          AND ac.tipo IN ('pausa_obrigatoria', 'contato_telefonico', 'encerramento_turno', 'troca_motorista')
     ))                                               AS atendidos,
     COUNT(*) FILTER (WHERE a.status = 'aberto')      AS abertos,
     now()                                            AS atualizado_em

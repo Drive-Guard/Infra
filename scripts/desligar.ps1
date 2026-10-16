@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Desliga o DriveGuard por completo: destrói tudo e confere que nada ficou.
 
