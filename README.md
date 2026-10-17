@@ -13,27 +13,43 @@ monitoramento.
 
 ## Subir com um clique
 
-Num Windows 10/11, mesmo sem nada instalado:
+Mesmo num computador sem nada instalado:
 
 1. No AWS Academy, clique em **Start Lab** e espere a bolinha ficar verde.
    Abra **AWS Details → AWS CLI: Show** e copie o bloco inteiro.
-2. Dê duplo clique em **`subir.cmd`**, na raiz deste repositório.
+2. Rode o script do seu sistema, na raiz deste repositório:
+
+| Sistema | Subir | Apagar tudo |
+|---|---|---|
+| Windows 10/11 | duplo clique em **`subir.cmd`** | `desligar.cmd` |
+| Linux e WSL (x86_64 ou arm64) | **`./subir.sh`** | `./desligar.sh` |
+
+No Linux, o sistema só precisa ter `git`, `curl` (ou `wget`), `tar` e
+`openssl`, que já vêm no Ubuntu/Debian. Não precisa de `sudo`, e as
+ferramentas ficam em `~/.local/share/driveguard`. No terminal, o script lê o
+bloco da área de transferência (`wl-paste`, `xclip`, `xsel` ou a do Windows,
+no WSL) ou pede para colar.
 
 Ele faz o resto sozinho, e rodar de novo é seguro:
 
 | Etapa | O que acontece |
 |---|---|
-| Ferramentas | baixa Terraform, Node.js, Python e AWS CLI em versões fixas, conferindo o SHA-256, para `%LOCALAPPDATA%\DriveGuard\ferramentas`. Também baixa Git e GitHub CLI se faltarem. Não instala nada no Windows e não pede administrador. |
+| Ferramentas | baixa Terraform, Node.js, Python e AWS CLI em versões fixas, conferindo o SHA-256, para `%LOCALAPPDATA%\DriveGuard\ferramentas` (Linux: `~/.local/share/driveguard`). Também baixa Git (só no Windows) e GitHub CLI se faltarem. Não instala nada no sistema e não pede administrador. |
 | Repositórios | clona (ou atualiza com `pull --ff-only`) o Backend e o Site ao lado do Infra. O Site é privado: se o computador ainda não tem login do GitHub, o script abre o login no navegador uma vez. |
 | Credenciais AWS | lê o bloco da área de transferência (ou pede para colar) e grava o `[default]` de `~/.aws/credentials`. Se a sessão do lab acabar no meio, ele pede o bloco novo e continua. |
 | Segredos | abre o cofre do grupo (`segredos/segredos.tfvars.enc`) e pede a senha. |
 | State | guarda o state no bucket `driveguard-tfstate-<conta>`, criado na conta do lab. Assim qualquer colega continua de onde o outro parou. Na primeira vez, leva o state local para lá. |
 | Apply | roda `terraform apply`, tenta de novo em erros passageiros e destrava o state se uma execução anterior caiu. No fim, abre o dashboard e mostra o login de teste. |
 
-**`desligar.cmd`** apaga tudo da conta e pede confirmação. O bucket do state
-fica, para o próximo `subir.cmd`. O registro de cada execução vai para
-`%LOCALAPPDATA%\DriveGuard\logs`. Para subir só a infraestrutura, sem Backend e
-sem dashboard: `scripts\subir.ps1 -SoInfra`.
+**`desligar.cmd`** (ou `./desligar.sh`) apaga tudo da conta e pede
+confirmação. O bucket do state fica, para o próximo `subir`. O registro de
+cada execução vai para `%LOCALAPPDATA%\DriveGuard\logs` (Linux:
+`~/.local/share/driveguard/logs`). Para subir só a infraestrutura, sem Backend e
+sem dashboard: `scripts\subir.ps1 -SoInfra` ou `./subir.sh --so-infra`.
+
+Windows e Linux podem se revezar na mesma conta. Os dois geram pacotes
+idênticos: finais de linha LF no git, zip das Lambdas com modo fixo e o mesmo
+Python 3.12.10. Assim, o apply de um colega não refaz o que outro subiu.
 
 As seções abaixo explicam o mesmo passo a passo, feito à mão.
 
@@ -312,7 +328,8 @@ Infra/
 ├── outputs.tf               # endpoints, credenciais, comandos de teste
 ├── providers.tf / versions.tf
 ├── terraform.tfvars.example # copie para terraform.tfvars
-├── subir.cmd / desligar.cmd # um clique: sobe ou apaga tudo (scripts/subir.ps1)
+├── subir.cmd / desligar.cmd # um clique no Windows: sobe ou apaga tudo (scripts/subir.ps1)
+├── subir.sh / desligar.sh   # o mesmo no Linux e no WSL (scripts/subir.sh)
 ├── backend.tf.example       # backend S3 à mão (o subir.cmd gera o backend.tf sozinho)
 ├── Makefile                 # atalhos de operação
 │
@@ -761,8 +778,8 @@ dois meses ligado direto. Como reduzir:
 
 | Ação | Windows | Linux/macOS/Git Bash | Tempo |
 |---|---|---|---|
-| **Ligar** | `subir.cmd` (ou `terraform apply`) | `make up` | ~15 min |
-| **Desligar** | `desligar.cmd` (ou `./scripts/desligar.ps1`) | `make down` | ~15 min |
+| **Ligar** | `subir.cmd` (ou `terraform apply`) | `./subir.sh` (ou `make up`) | ~15 min |
+| **Desligar** | `desligar.cmd` (ou `./scripts/desligar.ps1`) | `./desligar.sh` (ou `make down`) | ~15 min |
 | Conferir o que existe | — | `make custos` | segundos |
 
 Desligar **apaga tudo, inclusive o banco e os buckets**. Ao ligar de novo, o
