@@ -19,9 +19,12 @@ locals {
 # ----------------------------------------------------------------------------
 
 data "archive_file" "ingest" {
-  type        = "zip"
-  source_dir  = "${var.build_dir}/ingest"
-  output_path = "${var.build_dir}/_zips/ingest.zip"
+  type = "zip"
+  # Windows e Linux gravam permissões diferentes; fixar o modo deixa o
+  # zip (e o hash da Lambda) igual em qualquer computador do grupo.
+  output_file_mode = "0644"
+  source_dir       = "${var.build_dir}/ingest"
+  output_path      = "${var.build_dir}/_zips/ingest.zip"
 }
 
 resource "aws_cloudwatch_log_group" "ingest" {

@@ -15,9 +15,12 @@ locals {
 }
 
 data "archive_file" "simulador" {
-  type        = "zip"
-  source_dir  = "${var.build_dir}/simulador"
-  output_path = "${var.build_dir}/_zips/simulador.zip"
+  type = "zip"
+  # Windows e Linux gravam permissões diferentes; fixar o modo deixa o
+  # zip (e o hash da Lambda) igual em qualquer computador do grupo.
+  output_file_mode = "0644"
+  source_dir       = "${var.build_dir}/simulador"
+  output_path      = "${var.build_dir}/_zips/simulador.zip"
 }
 
 resource "aws_cloudwatch_log_group" "simulador" {

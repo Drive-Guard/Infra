@@ -62,9 +62,12 @@ resource "aws_sqs_queue" "dlq" {
 # ----------------------------------------------------------------------------
 
 data "archive_file" "etl_silver" {
-  type        = "zip"
-  source_dir  = "${var.build_dir}/etl_silver"
-  output_path = "${var.build_dir}/_zips/etl_silver.zip"
+  type = "zip"
+  # Windows e Linux gravam permissões diferentes; fixar o modo deixa o
+  # zip (e o hash da Lambda) igual em qualquer computador do grupo.
+  output_file_mode = "0644"
+  source_dir       = "${var.build_dir}/etl_silver"
+  output_path      = "${var.build_dir}/_zips/etl_silver.zip"
 }
 
 resource "aws_cloudwatch_log_group" "etl_silver" {
@@ -166,9 +169,12 @@ resource "aws_lambda_function_event_invoke_config" "etl_silver" {
 # ----------------------------------------------------------------------------
 
 data "archive_file" "etl_gold" {
-  type        = "zip"
-  source_dir  = "${var.build_dir}/etl_gold"
-  output_path = "${var.build_dir}/_zips/etl_gold.zip"
+  type = "zip"
+  # Windows e Linux gravam permissões diferentes; fixar o modo deixa o
+  # zip (e o hash da Lambda) igual em qualquer computador do grupo.
+  output_file_mode = "0644"
+  source_dir       = "${var.build_dir}/etl_gold"
+  output_path      = "${var.build_dir}/_zips/etl_gold.zip"
 }
 
 resource "aws_cloudwatch_log_group" "etl_gold" {
@@ -247,9 +253,12 @@ resource "aws_lambda_permission" "events_invoke_gold" {
 # ----------------------------------------------------------------------------
 
 data "archive_file" "db_migrate" {
-  type        = "zip"
-  source_dir  = "${var.build_dir}/db_migrate"
-  output_path = "${var.build_dir}/_zips/db_migrate.zip"
+  type = "zip"
+  # Windows e Linux gravam permissões diferentes; fixar o modo deixa o
+  # zip (e o hash da Lambda) igual em qualquer computador do grupo.
+  output_file_mode = "0644"
+  source_dir       = "${var.build_dir}/db_migrate"
+  output_path      = "${var.build_dir}/_zips/db_migrate.zip"
 }
 
 resource "aws_cloudwatch_log_group" "db_migrate" {
@@ -334,9 +343,12 @@ resource "aws_lambda_invocation" "migrate" {
 # ----------------------------------------------------------------------------
 
 data "archive_file" "prf_download" {
-  type        = "zip"
-  source_dir  = "${var.build_dir}/prf_download"
-  output_path = "${var.build_dir}/_zips/prf_download.zip"
+  type = "zip"
+  # Windows e Linux gravam permissões diferentes; fixar o modo deixa o
+  # zip (e o hash da Lambda) igual em qualquer computador do grupo.
+  output_file_mode = "0644"
+  source_dir       = "${var.build_dir}/prf_download"
+  output_path      = "${var.build_dir}/_zips/prf_download.zip"
 }
 
 resource "aws_cloudwatch_log_group" "prf_download" {
@@ -401,9 +413,12 @@ resource "aws_lambda_permission" "events_invoke_prf" {
 }
 
 data "archive_file" "prf_carga" {
-  type        = "zip"
-  source_dir  = "${var.build_dir}/prf_carga"
-  output_path = "${var.build_dir}/_zips/prf_carga.zip"
+  type = "zip"
+  # Windows e Linux gravam permissões diferentes; fixar o modo deixa o
+  # zip (e o hash da Lambda) igual em qualquer computador do grupo.
+  output_file_mode = "0644"
+  source_dir       = "${var.build_dir}/prf_carga"
+  output_path      = "${var.build_dir}/_zips/prf_carga.zip"
 }
 
 resource "aws_cloudwatch_log_group" "prf_carga" {

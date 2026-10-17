@@ -51,7 +51,12 @@ resource "null_resource" "build_lambdas" {
       for f in fileset("${path.module}/lambdas", "**/requirements.txt") :
       filesha1("${path.module}/lambdas/${f}")
     ]))
-    script = filesha1(local.is_windows ? "${path.module}/scripts/build_lambdas.ps1" : "${path.module}/scripts/build_lambdas.sh")
+    # Os dois scripts: o state é compartilhado entre Windows e Linux, e o
+    # hash de um só mudaria a cada troca de sistema.
+    script = sha1(join("", [
+      filesha1("${path.module}/scripts/build_lambdas.ps1"),
+      filesha1("${path.module}/scripts/build_lambdas.sh"),
+    ]))
   }
 
   # `interpreter` explícito em vez de uma string única: no Windows o

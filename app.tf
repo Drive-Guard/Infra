@@ -66,8 +66,9 @@ resource "null_resource" "deploy_backend" {
 
 # Só existe para o destroy: apaga o stack do Backend antes da API. O
 # provisioner de destroy só enxerga `self`, por isso stack e região ficam nos
-# triggers. `windows` é ignorado depois de criado: um colega em outro sistema
-# não deve recriar (e com isso apagar) o stack.
+# triggers. O sistema é decidido na hora do destroy (quem destrói pode estar
+# em outro sistema que quem criou); `windows` ficou nos triggers só para não
+# recriar o recurso, e é ignorado.
 resource "null_resource" "remover_backend" {
   count = var.deploy_aplicacao ? 1 : 0
 
@@ -84,9 +85,9 @@ resource "null_resource" "remover_backend" {
   provisioner "local-exec" {
     when = destroy
     interpreter = (
-      self.triggers.windows == "true"
-      ? ["PowerShell", "-NoProfile", "-Command"]
-      : ["bash", "-c"]
+      startswith(pathexpand("~"), "/")
+      ? ["bash", "-c"]
+      : ["PowerShell", "-NoProfile", "-Command"]
     )
     command = "aws cloudformation delete-stack --region ${self.triggers.regiao} --stack-name ${self.triggers.stack}; aws cloudformation wait stack-delete-complete --region ${self.triggers.regiao} --stack-name ${self.triggers.stack}"
   }

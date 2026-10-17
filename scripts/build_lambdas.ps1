@@ -87,7 +87,7 @@ foreach ($f in $Funcoes) {
         # Se o arquivo só tem comentários, pip não tem nada a instalar.
         $temPacotes = (Get-Content $req | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\S' }).Count -gt 0
         if ($temPacotes) {
-            & $Python -m pip install --quiet --upgrade --target $destino -r $req
+            & $Python -m pip install --quiet --upgrade --no-compile --target $destino -r $req
             if ($LASTEXITCODE -ne 0) { throw "pip install falhou para $nome" }
         }
     }

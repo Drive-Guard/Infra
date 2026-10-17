@@ -68,7 +68,7 @@ for dir in "$LAMBDAS_DIR"/*/; do
   esac
 
   if [ -f "$dir/requirements.txt" ] && grep -qEv '^\s*(#|$)' "$dir/requirements.txt"; then
-    "$PYTHON" -m pip install --quiet --upgrade --target "$destino" -r "$dir/requirements.txt"
+    "$PYTHON" -m pip install --quiet --upgrade --no-compile --target "$destino" -r "$dir/requirements.txt"
   fi
 
   # Os diretorios *.dist-info FICAM: o scramp, dependencia do pg8000, chama

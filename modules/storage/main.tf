@@ -278,15 +278,16 @@ resource "null_resource" "esvaziar_bucket" {
 
   provisioner "local-exec" {
     when = destroy
+    # O sistema é o de quem roda o destroy, não o de quem criou.
     interpreter = (
-      self.triggers.windows == "true"
-      ? ["PowerShell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
-      : ["bash", "-c"]
+      startswith(pathexpand("~"), "/")
+      ? ["bash", "-c"]
+      : ["PowerShell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
     )
     command = (
-      self.triggers.windows == "true"
-      ? "& './scripts/esvaziar_bucket.ps1' -Bucket '${self.triggers.bucket}' -Regiao '${self.triggers.region}'"
-      : "./scripts/esvaziar_bucket.sh '${self.triggers.bucket}' '${self.triggers.region}'"
+      startswith(pathexpand("~"), "/")
+      ? "bash ./scripts/esvaziar_bucket.sh '${self.triggers.bucket}' '${self.triggers.region}'"
+      : "& './scripts/esvaziar_bucket.ps1' -Bucket '${self.triggers.bucket}' -Regiao '${self.triggers.region}'"
     )
   }
 }
