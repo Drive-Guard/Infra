@@ -263,5 +263,5 @@ for fluxo, rotulo in itens:
 add("</svg>")
 
 destino = Path(__file__).with_name("arquitetura-aws.svg")
-destino.write_text("\n".join(partes), encoding="utf-8")
+destino.write_text("\n".join(partes), encoding="utf-8", newline="\n")
 print(f"Gerado {destino}")
