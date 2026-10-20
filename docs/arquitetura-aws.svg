@@ -1,0 +1,276 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1130" viewBox="0 0 1800 1130" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">
+<defs>
+<marker id="fim-ingestao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#E8590C"/></marker>
+<marker id="ini-ingestao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#E8590C"/></marker>
+<marker id="fim-gestor" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1C7ED6"/></marker>
+<marker id="ini-gestor" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1C7ED6"/></marker>
+<marker id="fim-prf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2F9E44"/></marker>
+<marker id="ini-prf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#2F9E44"/></marker>
+<marker id="fim-ia" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9C36B5"/></marker>
+<marker id="ini-ia" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9C36B5"/></marker>
+<marker id="fim-evento" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6B7280"/></marker>
+<marker id="ini-evento" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#6B7280"/></marker>
+</defs>
+<rect width="1800" height="1130" fill="#FFFFFF"/>
+<text x="20" y="42" font-size="26" font-weight="700" fill="#102A43" text-anchor="start">DriveGuard — Arquitetura AWS</text>
+<text x="20" y="66" font-size="13.5" font-weight="400" fill="#52606D" text-anchor="start">Detecção de sonolência em motoristas de caminhão e ônibus · us-east-1 · AWS Academy Learner Lab · tudo provisionado por Terraform (repositório Infra)</text>
+<rect x="20" y="100" width="275" height="306" rx="10" fill="#F5F7FA" stroke="#829AB1" stroke-width="1.6" stroke-dasharray="6 5"/>
+<text x="34" y="122" font-size="13" font-weight="700" fill="#486581" text-anchor="start">VEÍCULO (edge, fora da AWS)</text>
+<rect x="34" y="134" width="247" height="62" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="44" y="144" width="34" height="34" rx="7" fill="#5F6B7A"/>
+<text x="61" y="165.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">CAM</text>
+<text x="88" y="158" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Câmera IR/RGB · 30 fps</text>
+<text x="88" y="176" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">webcam no protótipo</text>
+<rect x="34" y="204" width="247" height="108" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="44" y="214" width="34" height="34" rx="7" fill="#5F6B7A"/>
+<text x="61" y="235.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">ML</text>
+<text x="88" y="228" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Modelo (repositório ML)</text>
+<text x="88" y="246" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">MediaPipe Face Mesh (468 pts)</text>
+<text x="88" y="262" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">EAR, MAR, PERCLOS, pose</text>
+<text x="88" y="278" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">classificador de 3 estados:</text>
+<text x="88" y="294" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">alerta · fadiga · sonolento</text>
+<rect x="34" y="320" width="247" height="72" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="44" y="330" width="34" height="34" rx="7" fill="#5F6B7A"/>
+<text x="61" y="353.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">!</text>
+<text x="88" y="344" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Alerta na cabine</text>
+<text x="88" y="362" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">funciona sem rede</text>
+<text x="88" y="378" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">buffer local; envia lotes HTTPS</text>
+<rect x="20" y="430" width="275" height="140" rx="10" fill="#F5F7FA" stroke="#829AB1" stroke-width="1.6" stroke-dasharray="6 5"/>
+<text x="34" y="452" font-size="13" font-weight="700" fill="#486581" text-anchor="start">GESTOR DE FROTA</text>
+<rect x="34" y="464" width="247" height="92" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="44" y="474" width="34" height="34" rx="7" fill="#5F6B7A"/>
+<text x="61" y="495.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">WEB</text>
+<text x="88" y="488" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Navegador</text>
+<text x="88" y="506" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">dashboard (React, build estático)</text>
+<text x="88" y="522" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">login no Cognito</text>
+<text x="88" y="538" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">chama a API com o token JWT</text>
+<rect x="1585" y="100" width="195" height="290" rx="10" fill="#F5F7FA" stroke="#829AB1" stroke-width="1.6" stroke-dasharray="6 5"/>
+<text x="1599" y="122" font-size="13" font-weight="700" fill="#486581" text-anchor="start">INTERNET</text>
+<rect x="1597" y="134" width="171" height="92" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="1607" y="144" width="34" height="34" rx="7" fill="#5F6B7A"/>
+<text x="1624" y="165.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">PRF</text>
+<text x="1651" y="158" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Dados abertos</text>
+<text x="1651" y="176" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">PRF: acidentes</text>
+<text x="1651" y="192" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">(Google Drive)</text>
+<text x="1651" y="208" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">Banco Central: IPCA</text>
+<rect x="1597" y="290" width="171" height="76" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="1607" y="300" width="34" height="34" rx="7" fill="#5F6B7A"/>
+<text x="1624" y="321.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">AI</text>
+<text x="1651" y="314" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Google Gemini</text>
+<text x="1651" y="332" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">insights da IA</text>
+<text x="1651" y="348" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">(camada gratuita)</text>
+<rect x="320" y="100" width="1240" height="940" rx="10" fill="#FFFFFF" stroke="#232F3E" stroke-width="1.6"/>
+<text x="334" y="122" font-size="13" font-weight="700" fill="#232F3E" text-anchor="start">AWS CLOUD · us-east-1</text>
+<text x="1544" y="122" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="end">conta do AWS Academy Learner Lab (só a LabRole)</text>
+<rect x="340" y="138" width="1200" height="262" rx="10" fill="#F8FAFC" stroke="#9FB3C8" stroke-width="1.6"/>
+<text x="354" y="160" font-size="13" font-weight="700" fill="#486581" text-anchor="start">SERVIÇOS REGIONAIS (fora da VPC)</text>
+<rect x="360" y="172" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#E7157B" stroke-width="2"/>
+<rect x="370" y="182" width="34" height="34" rx="7" fill="#E7157B"/>
+<text x="387" y="203.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">API</text>
+<text x="414" y="196" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">API Gateway REST</text>
+<text x="414" y="214" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">POST /v1/eventos</text>
+<text x="414" y="230" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">API Key + usage plan</text>
+<rect x="600" y="172" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="610" y="182" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="627" y="205.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="654" y="196" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Lambda ingest</text>
+<text x="654" y="214" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">valida o lote</text>
+<text x="654" y="230" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">grava o JSON cru</text>
+<rect x="840" y="172" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#7AA116" stroke-width="2"/>
+<rect x="850" y="182" width="34" height="34" rx="7" fill="#7AA116"/>
+<text x="867" y="203.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">S3</text>
+<text x="894" y="196" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">S3 Bronze</text>
+<text x="894" y="214" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">JSON imutável por dia</text>
+<text x="894" y="230" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">versionado e cifrado</text>
+<rect x="1080" y="172" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="1090" y="182" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="1107" y="205.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="1134" y="196" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Lambda prf-download</text>
+<text x="1134" y="214" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">semanal (EventBridge)</text>
+<text x="1134" y="230" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">baixa PRF e IPCA</text>
+<rect x="1320" y="172" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="1330" y="182" width="34" height="34" rx="7" fill="#7AA116"/>
+<text x="1347" y="203.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">S3</text>
+<text x="1374" y="196" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">S3 artefatos</text>
+<text x="1374" y="214" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">build do site, SQL, deploy</text>
+<text x="1374" y="230" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">troca de insights/relatórios</text>
+<rect x="360" y="296" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="370" y="306" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="387" y="329.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="414" y="320" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Lambda simulador</text>
+<text x="414" y="338" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">a cada 1 min (demo)</text>
+<text x="414" y="354" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">faz o papel das câmeras</text>
+<rect x="600" y="296" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="610" y="306" width="34" height="34" rx="7" fill="#DD344C"/>
+<text x="627" y="327.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">ID</text>
+<text x="654" y="320" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Cognito</text>
+<text x="654" y="338" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">User Pool</text>
+<text x="654" y="354" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">admin / gestor / operador</text>
+<rect x="1080" y="296" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#E7157B" stroke-width="2"/>
+<rect x="1090" y="306" width="34" height="34" rx="7" fill="#E7157B"/>
+<text x="1107" y="327.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">API</text>
+<text x="1134" y="320" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">API Gateway HTTP</text>
+<text x="1134" y="338" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">rotas do Backend</text>
+<text x="1134" y="354" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">autorizador JWT (Cognito)</text>
+<rect x="1320" y="296" width="200" height="76" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="1330" y="306" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="1347" y="329.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="1374" y="320" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Backend fora da VPC</text>
+<text x="1374" y="338" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">insightsIa (Gemini)</text>
+<text x="1374" y="354" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">usuarios · relatorioEnviar</text>
+<rect x="340" y="425" width="1200" height="520" rx="10" fill="#FBF8FF" stroke="#8C4FFF" stroke-width="1.6"/>
+<text x="354" y="447" font-size="13" font-weight="700" fill="#8C4FFF" text-anchor="start">VPC 10.0.0.0/16 · 2 AZs · sem NAT Gateway</text>
+<rect x="360" y="458" width="1160" height="108" rx="10" fill="#F6FBEF" stroke="#7AA116" stroke-width="1.6"/>
+<text x="374" y="480" font-size="13" font-weight="700" fill="#7AA116" text-anchor="start">Subnets públicas · 10.0.1.0/24, 10.0.3.0/24</text>
+<rect x="380" y="492" width="270" height="64" rx="8" fill="#FFFFFF" stroke="#ED7100" stroke-width="2"/>
+<rect x="390" y="502" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="407" y="523.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">EC2</text>
+<text x="434" y="516" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">EC2 dashboard · t3.micro</text>
+<text x="434" y="534" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">nginx + Elastic IP</text>
+<text x="434" y="550" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">copia o site do S3 a cada minuto</text>
+<rect x="360" y="582" width="1160" height="350" rx="10" fill="#F3F8FE" stroke="#1C7ED6" stroke-width="1.6"/>
+<text x="374" y="604" font-size="13" font-weight="700" fill="#1C7ED6" text-anchor="start">Subnets privadas · 10.0.2.0/24, 10.0.4.0/24</text>
+<rect x="376" y="626" width="400" height="236" rx="10" fill="#FFFFFF" stroke="#9FB3C8" stroke-width="1.6"/>
+<text x="390" y="648" font-size="13" font-weight="700" fill="#486581" text-anchor="start">ETL · Python 3.12</text>
+<rect x="388" y="660" width="182" height="72" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="398" y="670" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="415" y="693.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="442" y="684" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">prf-carga</text>
+<text x="442" y="702" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">evento S3 (prf/)</text>
+<text x="442" y="718" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">carrega a PRF</text>
+<rect x="582" y="660" width="182" height="72" rx="8" fill="#FFFFFF" stroke="#ED7100" stroke-width="2"/>
+<rect x="592" y="670" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="609" y="693.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="636" y="684" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">etl-silver</text>
+<text x="636" y="702" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">evento S3 (eventos/)</text>
+<text x="636" y="718" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">normaliza no Silver</text>
+<rect x="388" y="742" width="182" height="72" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="398" y="752" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="415" y="775.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="442" y="766" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">db-migrate</text>
+<text x="442" y="784" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">no terraform apply</text>
+<text x="442" y="800" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">schema + seed</text>
+<rect x="582" y="742" width="182" height="72" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="592" y="752" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="609" y="775.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="636" y="766" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">etl-gold</text>
+<text x="636" y="784" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">a cada 5 min</text>
+<text x="636" y="800" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">REFRESH das MVs</text>
+<text x="390" y="840" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">Falhas do ETL → fila SQS (DLQ) + alarme no CloudWatch</text>
+<rect x="816" y="672" width="248" height="132" rx="8" fill="#FFFFFF" stroke="#C925D1" stroke-width="2"/>
+<rect x="826" y="682" width="34" height="34" rx="7" fill="#C925D1"/>
+<text x="843" y="703.2" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">RDS</text>
+<text x="870" y="696" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">RDS PostgreSQL 16</text>
+<text x="870" y="714" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">db.t3.micro · TLS obrigatório</text>
+<text x="870" y="730" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">silver: frota, cadastros, PRF</text>
+<text x="870" y="746" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">gold: 11 materialized views</text>
+<text x="870" y="762" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">advisory locks entre cargas</text>
+<rect x="1104" y="626" width="400" height="236" rx="10" fill="#FFFFFF" stroke="#9FB3C8" stroke-width="1.6"/>
+<text x="1118" y="648" font-size="13" font-weight="700" fill="#486581" text-anchor="start">Backend · Node.js 22</text>
+<rect x="1116" y="660" width="376" height="80" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="1126" y="670" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="1143" y="693.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="1170" y="684" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">API: dashboard · motoristas · alertas</text>
+<text x="1170" y="702" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">relatórios (PDF, Excel, CSV) · cadastros</text>
+<text x="1170" y="718" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">uma Lambda por domínio, atrás do</text>
+<text x="1170" y="734" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">autorizador JWT</text>
+<rect x="1116" y="750" width="376" height="104" rx="8" fill="#FFFFFF" stroke="#CBD2D9" stroke-width="1.2"/>
+<rect x="1126" y="760" width="34" height="34" rx="7" fill="#ED7100"/>
+<text x="1143" y="783.3" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">λ</text>
+<text x="1170" y="774" font-size="13.5" font-weight="700" fill="#1F2933" text-anchor="start">Workers</text>
+<text x="1170" y="792" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">insightsContexto (1 h) e insightsGravar</text>
+<text x="1170" y="808" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">agendamentos de relatório (15 min)</text>
+<text x="1170" y="824" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">relatorioStatus · trocam arquivos com o</text>
+<text x="1170" y="840" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">S3 artefatos (evento → EventBridge)</text>
+<rect x="388" y="880" width="210" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="405" cy="897" r="11" fill="#8C4FFF"/>
+<text x="405" y="901" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">S3</text>
+<text x="422" y="902" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">Gateway Endpoint · S3</text>
+<rect x="612" y="880" width="290" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="629" cy="897" r="11" fill="#8C4FFF"/>
+<text x="629" y="901" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">EP</text>
+<text x="646" y="902" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">Interface Endpoint · CloudWatch Logs</text>
+<rect x="916" y="880" width="300" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="933" cy="897" r="11" fill="#8C4FFF"/>
+<text x="933" y="901" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">SG</text>
+<text x="950" y="902" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">Security groups: Lambdas → RDS 5432</text>
+<text x="340" y="978" font-size="12" font-weight="700" fill="#486581" text-anchor="start">SERVIÇOS DE APOIO</text>
+<rect x="476" y="959" width="150" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="493" cy="976" r="11" fill="#DD344C"/>
+<text x="493" y="980" font-size="9" font-weight="700" fill="#FFFFFF" text-anchor="middle">IAM</text>
+<text x="510" y="981" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">LabRole (todas)</text>
+<rect x="636" y="959" width="200" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="653" cy="976" r="11" fill="#E7157B"/>
+<text x="653" y="980" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">EB</text>
+<text x="670" y="981" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">EventBridge (agendas)</text>
+<rect x="846" y="959" width="210" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="863" cy="976" r="11" fill="#E7157B"/>
+<text x="863" y="980" font-size="9" font-weight="700" fill="#FFFFFF" text-anchor="middle">SSM</text>
+<text x="880" y="981" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">SSM (config e segredos)</text>
+<rect x="1066" y="959" width="230" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="1083" cy="976" r="11" fill="#E7157B"/>
+<text x="1083" y="980" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">CW</text>
+<text x="1100" y="981" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">CloudWatch (logs, alarmes)</text>
+<rect x="1306" y="959" width="100" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="1323" cy="976" r="11" fill="#E7157B"/>
+<text x="1323" y="980" font-size="9" font-weight="700" fill="#FFFFFF" text-anchor="middle">SNS</text>
+<text x="1340" y="981" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">SNS</text>
+<rect x="1416" y="959" width="124" height="34" rx="17" fill="#FFFFFF" stroke="#CBD2D9"/>
+<circle cx="1433" cy="976" r="11" fill="#7AA116"/>
+<text x="1433" y="980" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">S3</text>
+<text x="1450" y="981" font-size="11.5" font-weight="600" fill="#323F4B" text-anchor="start">S3 tfstate</text>
+<text x="340" y="1022" font-size="11.5" font-weight="400" fill="#52606D" text-anchor="start">S3 tfstate: state compartilhado do Terraform, criado pelo subir.cmd / subir.sh (fica no desligar). SageMaker Notebook: opcional, desligado por padrão.</text>
+<path d="M 281 165 L 330 165 L 330 210 L 360 210" fill="none" stroke="#E8590C" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-ingestao)"/>
+<rect x="284.25" y="145" width="43.5" height="18" rx="9" fill="#FFFFFF" stroke="#E8590C" stroke-width="1"/>
+<text x="306.0" y="158" font-size="11" font-weight="600" fill="#E8590C" text-anchor="middle">HTTPS</text>
+<path d="M 560 210 L 600 210" fill="none" stroke="#E8590C" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-ingestao)"/>
+<path d="M 800 210 L 840 210" fill="none" stroke="#E8590C" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-ingestao)"/>
+<path d="M 460 296 L 460 248" fill="none" stroke="#E8590C" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-ingestao)"/>
+<path d="M 870 248 L 870 616 L 700 616 L 700 660" fill="none" stroke="#6B7280" stroke-width="2.2" stroke-dasharray="7 5" stroke-linejoin="round" marker-end="url(#fim-evento)"/>
+<rect x="835.65" y="272" width="68.69999999999999" height="18" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1"/>
+<text x="870.0" y="285" font-size="11" font-weight="600" fill="#6B7280" text-anchor="middle">evento S3</text>
+<path d="M 700 616 L 540 616 L 540 660" fill="none" stroke="#6B7280" stroke-width="2.2" stroke-dasharray="7 5" stroke-linejoin="round" marker-end="url(#fim-evento)"/>
+<path d="M 764 700 L 816 700" fill="none" stroke="#E8590C" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-ingestao)"/>
+<path d="M 764 778 L 816 778" fill="none" stroke="#E8590C" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-ingestao)"/>
+<circle cx="306" cy="130" r="11" fill="#E8590C"/>
+<text x="306" y="134" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<path d="M 1230 172 L 1230 150 L 1597 150" fill="none" stroke="#2F9E44" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-prf)"/>
+<rect x="1458.25" y="142" width="43.5" height="18" rx="9" fill="#FFFFFF" stroke="#2F9E44" stroke-width="1"/>
+<text x="1480.0" y="155" font-size="11" font-weight="600" fill="#2F9E44" text-anchor="middle">HTTPS</text>
+<path d="M 1080 236 L 1040 236" fill="none" stroke="#2F9E44" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-prf)"/>
+<rect x="1041.4" y="241" width="37.2" height="18" rx="9" fill="#FFFFFF" stroke="#2F9E44" stroke-width="1"/>
+<text x="1060.0" y="254" font-size="11" font-weight="600" fill="#2F9E44" text-anchor="middle">prf/</text>
+<circle cx="1230" cy="150" r="11" fill="#2F9E44"/>
+<text x="1230" y="154" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+<path d="M 281 524 L 380 524" fill="none" stroke="#1C7ED6" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-gestor)"/>
+<rect x="287.4" y="539" width="37.2" height="18" rx="9" fill="#FFFFFF" stroke="#1C7ED6" stroke-width="1"/>
+<text x="306.0" y="552" font-size="11" font-weight="600" fill="#1C7ED6" text-anchor="middle">HTTP</text>
+<path d="M 281 480 L 332 480 L 332 412 L 700 412 L 700 372" fill="none" stroke="#1C7ED6" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-gestor)"/>
+<path d="M 700 412 L 1150 412 L 1150 372" fill="none" stroke="#1C7ED6" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-gestor)"/>
+<rect x="984.55" y="403" width="30.9" height="18" rx="9" fill="#FFFFFF" stroke="#1C7ED6" stroke-width="1"/>
+<text x="1000.0" y="416" font-size="11" font-weight="600" fill="#1C7ED6" text-anchor="middle">JWT</text>
+<path d="M 1270 372 L 1270 660" fill="none" stroke="#1C7ED6" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-gestor)"/>
+<path d="M 1116 700 L 1064 700" fill="none" stroke="#1C7ED6" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-gestor)"/>
+<path d="M 1116 778 L 1064 778" fill="none" stroke="#1C7ED6" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-gestor)"/>
+<circle cx="306" cy="452" r="11" fill="#1C7ED6"/>
+<text x="306" y="456" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<rect x="327" y="513" width="36" height="22" rx="5" fill="#8C4FFF"/>
+<text x="345" y="528" font-size="10.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">IGW</text>
+<path d="M 1520 334 L 1597 334" fill="none" stroke="#9C36B5" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#fim-ia)"/>
+<rect x="1538.25" y="315" width="43.5" height="18" rx="9" fill="#FFFFFF" stroke="#9C36B5" stroke-width="1"/>
+<text x="1560.0" y="328" font-size="11" font-weight="600" fill="#9C36B5" text-anchor="middle">HTTPS</text>
+<path d="M 1420 296 L 1420 248" fill="none" stroke="#9C36B5" stroke-width="2.2" stroke-dasharray="7 5" stroke-linejoin="round" marker-end="url(#fim-ia)" marker-start="url(#ini-ia)"/>
+<circle cx="1440" cy="272" r="11" fill="#9C36B5"/>
+<text x="1440" y="276" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<rect x="20" y="1064" width="1760" height="52" rx="8" fill="#F5F7FA" stroke="#D9E2EC"/>
+<line x1="40" y1="1090" x2="74" y2="1090" stroke="#E8590C" stroke-width="2.6" marker-end="url(#fim-ingestao)"/>
+<text x="84" y="1095" font-size="12.5" font-weight="600" fill="#323F4B" text-anchor="start">1  Ingestão: câmera → Bronze → Silver</text>
+<line x1="396.40000000000003" y1="1090" x2="430.40000000000003" y2="1090" stroke="#2F9E44" stroke-width="2.6" marker-end="url(#fim-prf)"/>
+<text x="440.40000000000003" y="1095" font-size="12.5" font-weight="600" fill="#323F4B" text-anchor="start">2  Base aberta da PRF (semanal)</text>
+<line x1="709.6000000000001" y1="1090" x2="743.6000000000001" y2="1090" stroke="#1C7ED6" stroke-width="2.6" marker-end="url(#fim-gestor)"/>
+<text x="753.6000000000001" y="1095" font-size="12.5" font-weight="600" fill="#323F4B" text-anchor="start">3  Gestor: site, login e API</text>
+<line x1="1001.2000000000002" y1="1090" x2="1035.2000000000003" y2="1090" stroke="#9C36B5" stroke-width="2.6" marker-end="url(#fim-ia)"/>
+<text x="1045.2000000000003" y="1095" font-size="12.5" font-weight="600" fill="#323F4B" text-anchor="start">4  Insights com IA (via S3)</text>
+<line x1="1285.6000000000001" y1="1090" x2="1319.6000000000001" y2="1090" stroke="#6B7280" stroke-width="2.6" stroke-dasharray="7 5" marker-end="url(#fim-evento)"/>
+<text x="1329.6000000000001" y="1095" font-size="12.5" font-weight="600" fill="#323F4B" text-anchor="start">Tracejado: disparo por evento S3 / agenda</text>
+</svg>

@@ -9,6 +9,9 @@ monitoramento.
 
 ![Arquitetura AWS do DriveGuard](docs/arquitetura-aws.png)
 
+> O diagrama é gerado por código (`python docs/gerar_diagrama.py`): quando um
+> recurso mudar no Terraform, ajuste o script e gere de novo.
+
 ---
 
 ## Subir com um clique
@@ -179,8 +182,6 @@ A dissertação (versão inicial) menciona "Amazon RDS com MySQL". Aqui foi usad
 - o time do dashboard já definiu o schema em PostgreSQL.
 
 O documento de contexto do TCC (`CONTEXTO_TCC.md`, seção 9) registra essa decisão.
-**O diagrama `docs/arquitetura-aws.png` ainda diz "RDS MySQL" e está desatualizado
-nesse ponto** — vale corrigir antes da entrega final.
 
 ### 3.2 Sem NAT Gateway
 
@@ -361,7 +362,7 @@ Infra/
 │   └── build_lambdas.sh     # empacotamento (Linux/macOS)
 │
 ├── examples/evento.json     # payload de exemplo da API
-└── docs/arquitetura-aws.png
+└── docs/                    # diagrama: gerar_diagrama.py → arquitetura-aws.svg → .png
 ```
 
 ---
