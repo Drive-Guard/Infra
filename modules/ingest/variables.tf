@@ -19,6 +19,11 @@ variable "lambda_runtime" {
   default     = "python3.12"
 }
 
+variable "artifacts_bucket" {
+  description = "Bucket de artefatos: destino do upload de modelos (POST /modelos)."
+  type        = string
+}
+
 variable "bronze_bucket" {
   description = "Nome do bucket Bronze."
   type        = string

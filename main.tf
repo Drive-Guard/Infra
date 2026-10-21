@@ -142,7 +142,8 @@ module "ingest" {
   lambda_role_arn = local.lambda_role_arn
   lambda_runtime  = var.lambda_runtime
 
-  bronze_bucket = module.storage.bronze_bucket_id
+  bronze_bucket    = module.storage.bronze_bucket_id
+  artifacts_bucket = module.storage.artifacts_bucket_id
 
   stage_name           = var.api_stage_name
   throttle_rate_limit  = var.api_throttle_rate_limit

@@ -54,6 +54,7 @@ resource "aws_lambda_function" "ingest" {
     variables = {
       BRONZE_BUCKET         = var.bronze_bucket
       BRONZE_PREFIX         = "eventos"
+      ARTIFACTS_BUCKET      = var.artifacts_bucket
       MAX_LEITURAS_POR_LOTE = tostring(var.max_leituras_por_lote)
       LOG_LEVEL             = var.log_level
     }
@@ -116,6 +117,35 @@ resource "aws_api_gateway_integration" "post_eventos" {
   timeout_milliseconds    = 15000
 }
 
+# --- POST /modelos ---------------------------------------------------------
+# Link de upload (URL pré-assinada) para o modelo treinado ir ao bucket de
+# artefatos só com a API Key, sem credencial da AWS no computador.
+
+resource "aws_api_gateway_resource" "modelos" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_rest_api.this.root_resource_id
+  path_part   = "modelos"
+}
+
+resource "aws_api_gateway_method" "post_modelos" {
+  rest_api_id      = aws_api_gateway_rest_api.this.id
+  resource_id      = aws_api_gateway_resource.modelos.id
+  http_method      = "POST"
+  authorization    = "NONE"
+  api_key_required = true
+}
+
+resource "aws_api_gateway_integration" "post_modelos" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  resource_id = aws_api_gateway_resource.modelos.id
+  http_method = aws_api_gateway_method.post_modelos.http_method
+
+  type                    = "AWS_PROXY"
+  integration_http_method = "POST"
+  uri                     = aws_lambda_function.ingest.invoke_arn
+  timeout_milliseconds    = 15000
+}
+
 # --- GET /health -----------------------------------------------------------
 # Sem API Key: serve para o veículo checar conectividade antes de gastar
 # bateria montando um lote, e para o health check do monitoramento.
@@ -155,6 +185,9 @@ resource "aws_api_gateway_deployment" "this" {
       aws_api_gateway_resource.eventos.id,
       aws_api_gateway_method.post_eventos.id,
       aws_api_gateway_integration.post_eventos.id,
+      aws_api_gateway_resource.modelos.id,
+      aws_api_gateway_method.post_modelos.id,
+      aws_api_gateway_integration.post_modelos.id,
       aws_api_gateway_resource.health.id,
       aws_api_gateway_method.get_health.id,
       aws_api_gateway_integration.get_health.id,
