@@ -17,6 +17,11 @@ SET search_path TO silver, public;
 ALTER TYPE silver.tipo_alerta ADD VALUE IF NOT EXISTS 'piscadas_excessivas';
 ALTER TYPE silver.tipo_alerta ADD VALUE IF NOT EXISTS 'fechamento_prolongado';
 
+-- Respostas da central que não atendem o alerta: tentativa de contato sem
+-- sucesso e "acompanhando" (viu e decidiu observar). Ver 03_cadastros.sql.
+ALTER TYPE silver.tipo_acao ADD VALUE IF NOT EXISTS 'tentativa_contato';
+ALTER TYPE silver.tipo_acao ADD VALUE IF NOT EXISTS 'monitorando';
+
 DO $$
 BEGIN
     CREATE TYPE silver.status_dispositivo AS ENUM ('ativo', 'pendente', 'inativo');

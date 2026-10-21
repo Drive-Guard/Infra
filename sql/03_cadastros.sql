@@ -386,6 +386,20 @@ CREATE INDEX IF NOT EXISTS ix_incidentes_empresa ON silver.incidentes (empresa_i
 CREATE INDEX IF NOT EXISTS ix_incidentes_br_uf ON silver.incidentes (br, uf) WHERE origem = 'prf';
 
 -- -----------------------------------------------------------------------------
+-- Resposta da central aos alertas (aba Monitoramento)
+--
+-- Um alerta pode ter várias respostas em sequência (liguei e não atendeu,
+-- depois pedi pausa...). Cada uma é uma linha de acoes_motorista com o
+-- alerta_id; "detalhe" guarda a opção escolhida (pausa de 30 min, rádio...).
+-- O falso alarme guarda o motivo: é o retorno para quem treina o modelo.
+-- -----------------------------------------------------------------------------
+
+ALTER TABLE silver.acoes_motorista ADD COLUMN IF NOT EXISTS detalhe TEXT;
+CREATE INDEX IF NOT EXISTS ix_acoes_alerta ON silver.acoes_motorista (alerta_id) WHERE alerta_id IS NOT NULL;
+ALTER TABLE silver.alertas ADD COLUMN IF NOT EXISTS motivo_descarte TEXT;
+ALTER TABLE silver.alertas ADD COLUMN IF NOT EXISTS observacao_descarte TEXT;
+
+-- -----------------------------------------------------------------------------
 -- Base da PRF: veículos envolvidos e controle das cargas
 -- -----------------------------------------------------------------------------
 
