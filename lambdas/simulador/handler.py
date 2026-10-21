@@ -34,6 +34,8 @@ import logging
 import math
 import os
 import random
+import re
+import unicodedata
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
@@ -71,6 +73,20 @@ def _iso(ts: datetime) -> str:
 
 def _sha(valor: str) -> str:
     return hashlib.sha256(valor.encode("utf-8")).hexdigest()
+
+
+def normalizar_id(valor: str) -> str:
+    """
+    Mesma regra do Backend (src/lib/identificadores.ts) e do cliente do modelo:
+    sem acento, e espaço, ponto ou outro símbolo viram hífen.
+    """
+    sem_acento = "".join(c for c in unicodedata.normalize("NFD", str(valor)) if not unicodedata.combining(c))
+    return re.sub(r"[^A-Za-z0-9]+", "-", sem_acento.strip()).strip("-")
+
+
+def hash_motorista(codigo: str) -> str:
+    """O que o dispositivo envia no lugar do ID do motorista (comparado em minúsculas)."""
+    return _sha(normalizar_id(codigo).lower())
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +272,7 @@ def montar_lote(agora: datetime, camera: int, rng: random.Random) -> dict | None
     return {
         "device_id": f"dg-edge-{camera:04d}",
         "schema_version": "1.0",
-        "motorista_hash": _sha(f"DRV-{999 + camera}"),
+        "motorista_hash": hash_motorista(f"DRV-{999 + camera}"),
         "veiculo_hash": None,
         "tipo_veiculo": perfil(camera)["tipo"],
         "enviado_em": _iso(agora),

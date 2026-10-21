@@ -759,11 +759,13 @@ LEFT JOIN silver.turnos t ON t.id = ul.turno_id
 LEFT JOIN silver.veiculos ve ON ve.id = COALESCE(ul.veiculo_id, t.veiculo_id)
 LEFT JOIN silver.vinculos_dispositivo_veiculo vd ON vd.veiculo_id = ve.id AND vd.fim IS NULL
 LEFT JOIN silver.dispositivos d ON d.id = vd.dispositivo_id
-LEFT JOIN silver.dim_uf u ON u.uf = m.regiao_uf;
+LEFT JOIN silver.dim_uf u ON u.uf = m.regiao_uf
+WHERE m.arquivado_em IS NULL;
 
 COMMENT ON VIEW gold.vw_frota_agora IS
     'Estado atual de cada motorista: última leitura, tendência contra as 5 anteriores, turno, '
-    'veículo e alertas de hoje. A API filtra pela recência de ultima_leitura_em.';
+    'veículo e alertas de hoje. A API filtra pela recência de ultima_leitura_em. Motorista '
+    'arquivado (excluído com histórico) não aparece.';
 
 -- =============================================================================
 -- Catálogo e refresh

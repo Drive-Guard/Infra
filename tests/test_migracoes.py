@@ -73,3 +73,28 @@ def test_reaplicar_as_migracoes_nao_muda_os_dados(banco_demo):
     aplicar(banco_demo, TODOS)
     assert _valor(banco_demo, "SELECT count(*) FROM silver.leituras_fadiga") == antes
     assert _valor(banco_demo, "SELECT count(*) FROM silver.motoristas") == 16
+
+
+def test_hash_antigo_do_motorista_vira_o_normalizado(banco_demo):
+    import hashlib
+
+    sha = lambda s: hashlib.sha256(s.encode("utf-8")).hexdigest()  # noqa: E731
+    cur = banco_demo.cursor()
+    # Seed já nasce no formato novo.
+    cur.execute("SELECT motorista_hash FROM silver.motoristas WHERE codigo = 'DRV-1000'")
+    assert cur.fetchone()[0] == sha("drv-1000")
+    # Motorista e câmera cadastrados antes da normalização.
+    cur.execute("SELECT empresa_id FROM silver.motoristas WHERE codigo = 'DRV-1000'")
+    empresa = cur.fetchone()[0]
+    cur.execute(
+        "INSERT INTO silver.motoristas (empresa_id, codigo, motorista_hash, nome_exibicao) VALUES (%s, 'Ana.Paula_X', %s, 'Ana')",
+        (empresa, sha("Ana.Paula_X")),
+    )
+    cur.execute("INSERT INTO silver.dispositivos (device_id, status) VALUES ('Device_777', 'pendente')")
+    banco_demo.commit()
+    aplicar(banco_demo, ["03_cadastros.sql"])
+    cur.execute("SELECT motorista_hash FROM silver.motoristas WHERE codigo = 'Ana.Paula_X'")
+    assert cur.fetchone()[0] == sha("ana-paula-x")
+    cur.execute("SELECT count(*) FROM silver.dispositivos WHERE device_id = 'device-777'")
+    assert cur.fetchone()[0] == 1
+    cur.close()

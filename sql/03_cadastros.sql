@@ -156,6 +156,72 @@ ALTER TABLE silver.turnos ADD COLUMN IF NOT EXISTS dispositivo_id UUID REFERENCE
 CREATE INDEX IF NOT EXISTS ix_turnos_viagem ON silver.turnos (viagem_id);
 
 -- -----------------------------------------------------------------------------
+-- Exclusão pela dashboard
+--
+-- O que nunca teve dado é apagado de verdade. O que já tem histórico (turnos,
+-- leituras, alertas, viagens) é arquivado: some das listas e dos cadastros,
+-- mas relatórios e gráficos continuam com os dados antigos. Se a câmera ou o
+-- motorista arquivado voltar a enviar dados, o ETL desarquiva.
+--
+-- Os índices únicos ignoram os arquivados, para o mesmo código ou placa poder
+-- ser usado de novo (cadastrar de novo o mesmo motorista desarquiva o antigo).
+-- -----------------------------------------------------------------------------
+
+ALTER TABLE silver.motoristas   ADD COLUMN IF NOT EXISTS arquivado_em TIMESTAMPTZ;
+ALTER TABLE silver.veiculos     ADD COLUMN IF NOT EXISTS arquivado_em TIMESTAMPTZ;
+ALTER TABLE silver.dispositivos ADD COLUMN IF NOT EXISTS arquivado_em TIMESTAMPTZ;
+ALTER TABLE silver.rotas        ADD COLUMN IF NOT EXISTS arquivado_em TIMESTAMPTZ;
+ALTER TABLE silver.viagens      ADD COLUMN IF NOT EXISTS arquivado_em TIMESTAMPTZ;
+
+DROP INDEX IF EXISTS silver.ux_motoristas_codigo;
+CREATE UNIQUE INDEX ux_motoristas_codigo
+    ON silver.motoristas (empresa_id, codigo) WHERE codigo IS NOT NULL AND arquivado_em IS NULL;
+DROP INDEX IF EXISTS silver.ux_veiculos_placa;
+CREATE UNIQUE INDEX ux_veiculos_placa
+    ON silver.veiculos (empresa_id, placa) WHERE placa IS NOT NULL AND arquivado_em IS NULL;
+DROP INDEX IF EXISTS silver.ux_dispositivos_codigo;
+CREATE UNIQUE INDEX ux_dispositivos_codigo
+    ON silver.dispositivos (empresa_id, codigo) WHERE codigo IS NOT NULL AND arquivado_em IS NULL;
+
+-- -----------------------------------------------------------------------------
+-- IDs normalizados (uma vez)
+--
+-- O hash do motorista passou a ser o do código normalizado em minúsculas
+-- ("DRV-1000" -> sha256('drv-1000')), igual no Backend, no ETL, no simulador
+-- e no cliente do modelo. Motoristas cadastrados antes, com o hash do código
+-- cru, ganham o hash novo. Os códigos antigos eram só ASCII (letras, números,
+-- ponto, hífen e sublinhado), então a troca de símbolo por hífen aqui dá o
+-- mesmo resultado da normalização completa. Se já existir alguém com o hash
+-- novo, aquele motorista fica como está (sem quebrar a migração).
+-- -----------------------------------------------------------------------------
+
+UPDATE silver.motoristas m
+   SET motorista_hash = x.novo
+  FROM (
+        SELECT id,
+               encode(sha256(convert_to(trim(BOTH '-' FROM regexp_replace(lower(codigo), '[^a-z0-9]+', '-', 'g')), 'UTF8')), 'hex') AS novo
+          FROM silver.motoristas
+         WHERE codigo IS NOT NULL
+           AND motorista_hash = encode(sha256(convert_to(codigo, 'UTF8')), 'hex')
+       ) x
+ WHERE m.id = x.id
+   AND x.novo <> m.motorista_hash
+   AND NOT EXISTS (SELECT 1 FROM silver.motoristas o WHERE o.motorista_hash = x.novo);
+
+-- Câmeras gravadas com ID fora do padrão novo (ex.: "device_123") passam para
+-- o normalizado, se não houver outra com ele.
+UPDATE silver.dispositivos d
+   SET device_id = x.novo
+  FROM (
+        SELECT id, trim(BOTH '-' FROM regexp_replace(lower(device_id), '[^a-z0-9]+', '-', 'g')) AS novo
+          FROM silver.dispositivos
+       ) x
+ WHERE d.id = x.id
+   AND x.novo <> d.device_id
+   AND x.novo <> ''
+   AND NOT EXISTS (SELECT 1 FROM silver.dispositivos o WHERE o.device_id = x.novo);
+
+-- -----------------------------------------------------------------------------
 -- Parâmetros do ROI
 --
 -- Os padrões ficam em parametros_roi_padrao, cada um com a fonte. A empresa

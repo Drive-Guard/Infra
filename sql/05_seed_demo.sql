@@ -71,8 +71,8 @@
 --   * a empresa tem UUID fixo, o mesmo que os usuários de demonstração do
 --     Cognito carregam em custom:empresa_id;
 --   * o ID fixo de cada dispositivo é o código do motorista (DRV-1000...), e
---     motorista_hash = SHA-256 desse código, igual ao que o cliente do modelo
---     calcula antes de enviar. O simulador de frota usa os mesmos IDs e o
+--     motorista_hash = SHA-256 desse código normalizado em minúsculas
+--     ("drv-1000"), igual ao que o Backend e o cliente do modelo calculam. O simulador de frota usa os mesmos IDs e o
 --     mesmo modelo de fadiga;
 --   * as features seguem a literatura usada no TCC (EAR ~0,31 x ~0,16,
 --     MAR ~0,22 x ~0,51, PERCLOS ~0,08 x ~0,54, pitch ~0 x ~-18 graus).
@@ -303,7 +303,7 @@ BEGIN
                                        status, baseline_ear)
         VALUES (c_empresa,
                 'DRV-' || (999 + i)::TEXT,
-                encode(sha256(convert_to('DRV-' || (999 + i)::TEXT, 'UTF8')), 'hex'),
+                encode(sha256(convert_to(lower('DRV-' || (999 + i)::TEXT), 'UTF8')), 'hex'),
                 v_nomes[i],
                 28 + (i * 2) % 32,
                 1 + (i * 3) % 25,

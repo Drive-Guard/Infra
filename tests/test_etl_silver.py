@@ -172,6 +172,34 @@ def test_camera_desconhecida_entra_como_pendente(conn, enviar):
     assert um(conn, "SELECT count(*) FROM silver.leituras_fadiga")[0] == 10
 
 
+def test_id_da_camera_e_normalizado(conn, enviar):
+    # Mesma regra do cadastro: "Device_123" e "device-123" são a mesma câmera.
+    enviar(lote("Device_123", "DRV-9000", BASE))
+    enviar(lote("device-123", "DRV-9000", BASE + timedelta(minutes=20)))
+    assert todos(conn, "SELECT device_id FROM silver.dispositivos") == [("device-123",)]
+    assert um(conn, "SELECT count(DISTINCT device_id) FROM silver.leituras_fadiga") == (1,)
+
+
+def test_camera_e_motorista_arquivados_voltam_quando_enviam(conn, enviar):
+    frota = cadastrar_frota(conn)
+    enviar(lote("dg-edge-0500", "DRV-1000", BASE))
+    cur = conn.cursor()
+    cur.execute("UPDATE silver.dispositivos SET arquivado_em = now(), status = 'inativo' WHERE id = %s", (frota["dispositivo"],))
+    cur.execute("UPDATE silver.motoristas SET arquivado_em = now() WHERE motorista_hash = %s", (sha("DRV-1000"),))
+    cur.execute("UPDATE silver.vinculos_dispositivo_veiculo SET fim = %s WHERE dispositivo_id = %s",
+                (BASE + timedelta(minutes=30), frota["dispositivo"]))
+    conn.commit()
+    cur.close()
+
+    enviar(lote("dg-edge-0500", "DRV-1000", BASE + timedelta(hours=2)))
+    status, empresa, arquivado = um(
+        conn, "SELECT status::text, empresa_id, arquivado_em FROM silver.dispositivos WHERE id = %s", (frota["dispositivo"],)
+    )
+    # Volta como pendente e sem empresa: o gestor decide de novo.
+    assert status == "pendente" and empresa is None and arquivado is None
+    assert um(conn, "SELECT arquivado_em FROM silver.motoristas WHERE motorista_hash = %s", (sha("DRV-1000"),)) == (None,)
+
+
 def test_mesmo_arquivo_nao_e_processado_duas_vezes(conn, enviar):
     envelope = lote("dg-edge-0900", "DRV-9000", BASE)
     enviar(envelope, key="eventos/fixo.json")

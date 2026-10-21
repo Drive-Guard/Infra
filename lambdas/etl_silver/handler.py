@@ -24,6 +24,8 @@ Roda dentro da VPC (subnet privada) porque precisa alcançar o RDS.
 import json
 import logging
 import os
+import re
+import unicodedata
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -57,6 +59,15 @@ TIPOS_ALERTA = {
 GRAVIDADES = {"baixa", "media", "alta", "critica"}
 
 _empresa_padrao_id = None
+
+
+def normalizar_dispositivo(valor) -> str:
+    """
+    ID da câmera como o Backend grava (src/lib/identificadores.ts): sem acento,
+    símbolos viram hífen, minúsculas. "Device_123" e "device-123" são a mesma.
+    """
+    sem_acento = "".join(c for c in unicodedata.normalize("NFD", str(valor)) if not unicodedata.combining(c))
+    return re.sub(r"[^A-Za-z0-9]+", "-", sem_acento.strip()).strip("-").lower() or "desconhecido"
 
 
 def _parse_ts(valor):
@@ -117,7 +128,14 @@ def _resolver_dispositivo(cur, device_id, primeira_em, ultima_em) -> dict:
         ON CONFLICT (device_id) DO UPDATE
            SET ultimo_contato_em = GREATEST(
                    COALESCE(silver.dispositivos.ultimo_contato_em, EXCLUDED.ultimo_contato_em),
-                   EXCLUDED.ultimo_contato_em)
+                   EXCLUDED.ultimo_contato_em),
+               -- Câmera excluída (arquivada) que voltou a enviar: reaparece
+               -- como pendente, para o gestor decidir de novo.
+               empresa_id = CASE WHEN silver.dispositivos.arquivado_em IS NULL
+                                 THEN silver.dispositivos.empresa_id END,
+               status = CASE WHEN silver.dispositivos.arquivado_em IS NULL
+                             THEN silver.dispositivos.status ELSE 'pendente' END,
+               arquivado_em = NULL
         RETURNING id, empresa_id, status::text
         """,
         (device_id, ultima_em),
@@ -160,11 +178,14 @@ def _resolver_motorista(cur, empresa_id, motorista_hash) -> str:
     """
     padrao = _empresa_padrao(cur)
     cur.execute(
-        "SELECT id, empresa_id FROM silver.motoristas WHERE motorista_hash = %s",
+        "SELECT id, empresa_id, arquivado_em FROM silver.motoristas WHERE motorista_hash = %s",
         (motorista_hash,),
     )
     row = cur.fetchone()
     if row:
+        if row[2] is not None:
+            # Excluído (arquivado) e voltou a dirigir: volta às listas.
+            cur.execute("UPDATE silver.motoristas SET arquivado_em = NULL WHERE id = %s", (row[0],))
         if str(row[1]) == padrao and empresa_id and str(empresa_id) != padrao:
             cur.execute(
                 "UPDATE silver.motoristas SET empresa_id = %s WHERE id = %s",
@@ -496,7 +517,7 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
     ingest_id = envelope.get("ingest_id")
     leituras = payload.get("leituras") or []
     alertas = payload.get("alertas") or []
-    device_id = payload.get("device_id", "desconhecido")
+    device_id = normalizar_dispositivo(payload.get("device_id") or "desconhecido")
 
     cur = conn.cursor()
     try:
