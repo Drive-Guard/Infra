@@ -127,6 +127,7 @@ resource "aws_ssm_parameter" "string" {
     user_pool_client_id = var.cognito_client_id
     site_url            = var.site_url
     email_remetente     = var.email_remetente
+    smtp_usuario        = var.smtp_usuario
     ia_modelo           = var.ia_modelo
   }
 
@@ -154,6 +155,18 @@ resource "aws_ssm_parameter" "db_password" {
 
   tags = {
     Name = "${var.name_prefix}-backend-db_password"
+  }
+}
+
+# Senha de app do Gmail: segue o segredos.auto.tfvars (sem ignore_changes,
+# para quem configurar o e-mail depois só rodar o subir de novo).
+resource "aws_ssm_parameter" "smtp_senha" {
+  name  = "${local.ssm_prefix}/smtp_senha"
+  type  = "SecureString"
+  value = var.smtp_senha != "" ? var.smtp_senha : "nao-configurado"
+
+  tags = {
+    Name = "${var.name_prefix}-backend-smtp_senha"
   }
 }
 

@@ -454,6 +454,19 @@ variable "email_remetente" {
   default     = ""
 }
 
+variable "email_smtp_usuario" {
+  description = "Conta Gmail que envia os relatórios por SMTP (o caminho no Learner Lab, que bloqueia o SES). Vazio = sem SMTP."
+  type        = string
+  default     = ""
+}
+
+variable "email_smtp_senha" {
+  description = "Senha de app do Gmail (myaccount.google.com/apppasswords; exige verificação em 2 etapas). Fica no segredos.auto.tfvars."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "ia_modelo" {
   description = "Modelos de IA dos insights (Google Gemini), separados por vírgula: o próximo é usado se o anterior falhar."
   type        = string

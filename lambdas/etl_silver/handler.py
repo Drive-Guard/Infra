@@ -742,10 +742,12 @@ def ultimas_leituras(conn, devices: list[str]) -> dict:
 
 def cobertura(conn, turnos: list[dict]) -> list[dict]:
     """
-    Para cada turno da escala {device, inicio, fim, rota}: quantos blocos de
-    5 minutos têm leitura e se ele é "protegido" (alguém da central agiu
-    nele: ação, ocorrência ou alerta respondido), caso em que não é apagado.
-    Os incompletos ganham a viagem planejada da rota, se não houver uma.
+    Para cada turno da escala {device, inicio, fim}: quantos blocos de 5
+    minutos têm leitura, o maior intervalo sem leitura (contando o começo e o
+    fim do turno; o seed grava de 10 em 10 ou de 15 em 15 minutos, e a parada
+    tem 30) e se ele é "protegido", caso em que não é apagado: alguém da
+    central agiu nele (ação, ocorrência, alerta respondido) ou ele terminou
+    antes de propósito (central encerrou a jornada, acidente).
     """
     if not turnos:
         return []
@@ -761,19 +763,31 @@ def cobertura(conn, turnos: list[dict]) -> list[dict]:
                    (SELECT COUNT(DISTINCT floor(extract(epoch FROM l.registrado_em) / 300))
                       FROM silver.leituras_fadiga l
                      WHERE l.device_id = x.device AND l.registrado_em >= x.inicio AND l.registrado_em < x.fim) AS blocos,
+                   (SELECT MAX(EXTRACT(EPOCH FROM (g.prox - g.ts)) / 60)
+                      FROM (SELECT ts, lead(ts) OVER (ORDER BY ts) AS prox
+                              FROM (SELECT x.inicio AS ts
+                                    UNION ALL
+                                    SELECT l.registrado_em FROM silver.leituras_fadiga l
+                                     WHERE l.device_id = x.device AND l.registrado_em >= x.inicio AND l.registrado_em < x.fim
+                                    UNION ALL
+                                    SELECT x.fim) pontos) g) AS maior_lacuna_min,
                    EXISTS (
                        SELECT 1 FROM silver.turnos t
                         WHERE t.device_id = x.device AND t.iniciado_em < x.fim
                           AND COALESCE(t.finalizado_em, 'infinity'::timestamptz) > x.inicio
-                          AND (EXISTS (SELECT 1 FROM silver.acoes_motorista a WHERE a.turno_id = t.id AND a.realizado_por IS NOT NULL)
-                               OR EXISTS (SELECT 1 FROM silver.incidentes i WHERE i.turno_id = t.id AND i.registrado_por IS NOT NULL)
+                          AND (EXISTS (SELECT 1 FROM silver.acoes_motorista a
+                                        WHERE a.turno_id = t.id AND (a.realizado_por IS NOT NULL OR a.tipo = 'encerramento_turno'))
+                               OR EXISTS (SELECT 1 FROM silver.incidentes i WHERE i.turno_id = t.id)
                                OR EXISTS (SELECT 1 FROM silver.alertas al WHERE al.turno_id = t.id AND al.reconhecido_por IS NOT NULL))
                    ) AS protegido
               FROM jsonb_to_recordset(%s::jsonb) AS x(ord int, device text, inicio timestamptz, fim timestamptz, rota text)
             """,
             (json.dumps(linhas),),
         )
-        resultado = {ord_: {"blocos": n, "protegido": prot} for ord_, n, prot in cur.fetchall()}
+        resultado = {
+            ord_: {"blocos": n, "maior_lacuna_min": round(float(lacuna), 1), "protegido": prot}
+            for ord_, n, lacuna, prot in cur.fetchall()
+        }
         conn.rollback()
     finally:
         cur.close()
@@ -874,6 +888,80 @@ def limpar(conn, intervalos: list[dict]) -> dict:
     return {"turnos": turnos, "leituras_soltas": leituras}
 
 
+def simular_central(conn, ate: str) -> dict:
+    """
+    A central da simulação para o histórico gerado pelo simulador (câmeras
+    dg-edge-*), na mesma política do seed (fase do programa): nos turnos já
+    encerrados antes de `ate`, 85% dos alertas graves de sono recebem uma
+    parada para descanso e 60% dos outros, um contato; todos ficam
+    resolvidos. Sem autor (realizado_por nulo): é a simulação, não alguém da
+    central. Os alertas mais recentes que `ate` ficam para quem usa a
+    dashboard responder.
+
+    Também encerra os turnos que ficaram abertos sem leitura há mais de 2 h
+    (o último turno regenerado de cada motorista, que nenhum lote seguinte fechou).
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""
+            UPDATE silver.turnos t
+               SET status = 'concluido', finalizado_em = {_fim_efetivo_sql("t")}
+             WHERE t.status = 'em_andamento' AND t.device_id LIKE 'dg-edge-%%'
+               AND {_fim_efetivo_sql("t")} < now() - interval '2 hours'
+            """
+        )
+        fechados = cur.rowcount
+        cur.execute(
+            """
+            CREATE TEMP TABLE _central ON COMMIT DROP AS
+            SELECT a.id, a.motorista_id, a.turno_id,
+                   a.disparado_em + make_interval(secs => 90 + abs(hashtext(a.id::text)) %% 150) AS reconh,
+                   CASE
+                       WHEN a.gravidade IN ('alta', 'critica') AND a.tipo NOT IN ('distracao', 'perda_de_face')
+                            AND abs(hashtext(a.id::text || 'grave')) %% 100 < 85 THEN 'pausa_obrigatoria'
+                       WHEN a.gravidade NOT IN ('alta', 'critica') OR a.tipo IN ('distracao', 'perda_de_face') THEN
+                            CASE WHEN abs(hashtext(a.id::text || 'medio')) %% 100 < 60 THEN 'contato_telefonico' END
+                   END AS acao
+              FROM silver.alertas a
+              JOIN silver.turnos t ON t.id = a.turno_id
+             WHERE t.status <> 'em_andamento' AND t.device_id LIKE 'dg-edge-%%'
+               AND t.finalizado_em < %s::timestamptz AND t.finalizado_em >= %s::timestamptz - interval '35 days'
+               AND a.status = 'aberto'
+               AND NOT EXISTS (SELECT 1 FROM silver.acoes_motorista ac WHERE ac.alerta_id = a.id)
+            """,
+            (ate, ate),
+        )
+        cur.execute(
+            """
+            INSERT INTO silver.acoes_motorista (motorista_id, turno_id, alerta_id, tipo, detalhe, realizado_em)
+            SELECT motorista_id, turno_id, id, acao::silver.tipo_acao,
+                   CASE acao WHEN 'pausa_obrigatoria' THEN '30 min' ELSE 'telefone' END,
+                   reconh + interval '1 minute'
+              FROM _central WHERE acao IS NOT NULL
+            """
+        )
+        acoes = cur.rowcount
+        cur.execute(
+            """
+            UPDATE silver.alertas a
+               SET status = 'resolvido', reconhecido_em = c.reconh,
+                   resolvido_em = c.reconh + CASE c.acao WHEN 'pausa_obrigatoria' THEN interval '35 minutes'
+                                                          WHEN 'contato_telefonico' THEN interval '5 minutes'
+                                                          ELSE interval '20 minutes' END
+              FROM _central c WHERE a.id = c.id
+            """
+        )
+        alertas = cur.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+    return {"turnos_fechados": fechados, "alertas_resolvidos": alertas, "acoes": acoes}
+
+
 def limpar_periodo(conn, de: str, ate: str) -> dict:
     """
     Apaga tudo o que aconteceu nos dias [de, ate] (datas de Brasília) nas
@@ -939,6 +1027,8 @@ def _acao(event):
         return {"viagens": planejar_viagens(conn, list(event.get("turnos") or []))}
     if acao == "limpar":
         return {"limpo": limpar(conn, list(event.get("intervalos") or []))}
+    if acao == "simular_central":
+        return {"central": simular_central(conn, event["ate"])}
     if acao == "limpar_periodo":
         return {"apagado": limpar_periodo(conn, event["de"], event["ate"])}
     raise ValueError(f"acao desconhecida: {acao}")

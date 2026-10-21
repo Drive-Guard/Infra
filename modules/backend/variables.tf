@@ -105,6 +105,19 @@ variable "email_remetente" {
   default     = ""
 }
 
+variable "smtp_usuario" {
+  description = "Conta Gmail que envia os relatórios por SMTP. Vazio = sem SMTP."
+  type        = string
+  default     = ""
+}
+
+variable "smtp_senha" {
+  description = "Senha de app do Gmail."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "ia_modelo" {
   description = "Modelo de IA usado nos insights (camada gratuita)."
   type        = string

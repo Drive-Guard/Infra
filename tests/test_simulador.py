@@ -162,11 +162,14 @@ def test_preencher_regenera_turnos_que_faltam_ou_pela_metade(monkeypatch):
             resposta = []
             for t in pedido["turnos"]:
                 c = int(t["device"][-4:])
-                resposta.append({1: {"blocos": 0, "protegido": False},
-                                 2: {"blocos": 3, "protegido": False},
-                                 3: {"blocos": 10_000, "protegido": False},
-                                 4: {"blocos": 3, "protegido": True}}[c])
+                resposta.append({1: {"blocos": 0, "maior_lacuna_min": 600, "protegido": False},
+                                 2: {"blocos": 3, "maior_lacuna_min": 300, "protegido": False},
+                                 # Leitura de 15 em 15 min (como o seed) e paradas de 30: completo.
+                                 3: {"blocos": 30, "maior_lacuna_min": 45, "protegido": False},
+                                 4: {"blocos": 3, "maior_lacuna_min": 300, "protegido": True}}[c])
             return {"cobertura": resposta}
+        if pedido["acao"] == "simular_central":
+            return {"central": {"turnos_fechados": 0, "alertas_resolvidos": 0, "acoes": 0}}
         return {}
 
     monkeypatch.setattr(simulador, "_etl", etl)
@@ -186,6 +189,9 @@ def test_preencher_regenera_turnos_que_faltam_ou_pela_metade(monkeypatch):
     assert {t["device"] for t in planejar["turnos"]} == {"dg-edge-0001", "dg-edge-0002"}
     assert planejar["turnos"][0]["rota"] in simulador.NOMES_ROTAS
     assert r["turnos_protegidos"] >= 1 and r["lotes"] == len(enviados) and estado.get("fim")
+    # A central da simulação só responde turnos encerrados há mais de 6 h.
+    central = next(p for p in pedidos if p["acao"] == "simular_central")
+    assert _parse(central["ate"]) == agora - timedelta(hours=6)
     # Cada turno vai inteiro, num lote só, do começo ao fim (ou até agora).
     for lote in enviados:
         ts = [_parse(l["registrado_em"]) for l in lote["leituras"]]

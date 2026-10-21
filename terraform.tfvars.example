@@ -146,7 +146,7 @@ email_remetente = ""
 # ----------------------------------------------------------------------------
 
 enable_simulador  = true
-simulador_cameras = 16
+simulador_cameras = 40
 
 # ----------------------------------------------------------------------------
 # Aplicação e massa de demonstração

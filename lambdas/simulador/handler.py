@@ -77,8 +77,12 @@ CHECAR_A_CADA_MIN = 15
 # Nas checagens periódicas, só os turnos dos últimos dias (a checagem
 # completa roda quando o simulador é ligado ou pedido).
 DIAS_CHECAGEM_PERIODICA = 2
-# Turno com menos que isto dos blocos de 5 min esperados é regenerado.
-COBERTURA_MINIMA = 0.8
+# Turno com um intervalo sem leitura maior que isto (contando o começo e o
+# fim) está incompleto. A parada é de 30 min e o seed grava de 15 em 15.
+LACUNA_MAXIMA_MIN = 50
+# A central da simulação responde os alertas dos turnos encerrados há mais
+# que isto; os mais recentes ficam para quem usa a dashboard.
+CENTRAL_DEPOIS_H = 6
 # Uma execução preenchendo (ou que acabou de preencher, com o ETL ainda
 # gravando) segura as outras por este tempo.
 TRAVA_MIN = 14
@@ -497,6 +501,9 @@ def preencher_lacunas(agora: datetime, forcar: bool = False, dias: int | None = 
     _gravar_estado({"inicio": _iso(agora)})
 
     dias = dias or (PREENCHER_MAX_DIAS if forcar else DIAS_CHECAGEM_PERIODICA)
+    # Os lotes da execução anterior já foram gravados: a central da simulação
+    # responde os alertas do histórico (ver simular_central no ETL).
+    central = _etl({"acao": "simular_central", "ate": _iso(agora - timedelta(hours=CENTRAL_DEPOIS_H))})["central"]
     candidatos = turnos_a_conferir(agora, dias)
     device = lambda c: f"dg-edge-{c['camera']:04d}"  # noqa: E731
     cobertura = _etl({
@@ -506,7 +513,7 @@ def preencher_lacunas(agora: datetime, forcar: bool = False, dias: int | None = 
 
     regenerar, limpar, protegidos = [], [], 0
     for c, cob in zip(candidatos, cobertura):
-        if cob["blocos"] >= COBERTURA_MINIMA * c["esperado"]:
+        if cob["blocos"] and cob["maior_lacuna_min"] <= LACUNA_MAXIMA_MIN:
             continue
         if cob["blocos"] and cob["protegido"]:
             protegidos += 1
@@ -540,6 +547,7 @@ def preencher_lacunas(agora: datetime, forcar: bool = False, dias: int | None = 
         "inicio": _iso(agora), "fim": _iso(datetime.now(timezone.utc)), "dias": dias,
         "turnos_conferidos": len(candidatos), "turnos_regenerados": len(regenerar), "turnos_refeitos": len(limpar),
         "turnos_protegidos": protegidos, "lotes": lotes, "leituras": leituras, "falhas": falhas[:10],
+        "central": central,
     }
     _gravar_estado(resumo)
     logger.info("Preenchimento: %s", resumo)

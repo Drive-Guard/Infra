@@ -508,6 +508,20 @@ senha_tamanho_minimo  = 8      # política do Cognito (padrão 10)
 senha_exige_maiuscula = false  # padrão true
 ```
 
+**E-mail dos relatórios (Gmail):** o Learner Lab bloqueia o SES, então os relatórios e
+agendamentos saem por uma conta Gmail. Na conta, ative a verificação em 2 etapas e gere
+uma senha de app em <https://myaccount.google.com/apppasswords>. Depois, no
+`segredos.auto.tfvars`:
+
+```hcl
+email_smtp_usuario = "conta-da-central@gmail.com"
+email_smtp_senha   = "abcd efgh ijkl mnop"   # a senha de app, não a senha da conta
+```
+
+Rode o `subir` de novo (e `-Fechar` para guardar no cofre do grupo). Sem isso, o envio
+fica como "não enviado" com o motivo na aba Relatórios, e o arquivo segue disponível
+para baixar.
+
 ### 6.7 Credenciais novas do Learner Lab: subir tudo e injetar meses de dados
 
 O Learner Lab troca as credenciais a cada sessão e pode acabar os créditos. Para

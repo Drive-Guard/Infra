@@ -344,7 +344,9 @@ def test_cobertura_limpar_e_viagem_planejada(conn, enviar, etl):
         {"device": "dg-edge-0500", "inicio": iso(BASE + timedelta(days=1)), "fim": iso(BASE + timedelta(days=1, hours=2)), "rota": "Via Dutra"},
     ]
     cob = etl.handler({"acao": "cobertura", "turnos": pedido}, None)["cobertura"]
-    assert cob == [{"blocos": 12, "protegido": False}, {"blocos": 0, "protegido": False}]
+    # 1 h de leituras num turno de 2 h: o maior intervalo sem leitura é a 2ª hora.
+    assert cob == [{"blocos": 12, "maior_lacuna_min": 65.0, "protegido": False},
+                   {"blocos": 0, "maior_lacuna_min": 120.0, "protegido": False}]
 
     # Alguém da central agiu no turno: ele passa a ser protegido.
     cur = conn.cursor()
@@ -381,3 +383,23 @@ def test_limpar_periodo_apaga_os_dias_e_mantem_cadastros(conn, enviar, etl):
     assert um(conn, "SELECT count(*), min(registrado_em) FROM silver.leituras_fadiga") == (10, BASE + timedelta(days=1))
     assert um(conn, "SELECT count(*) FROM silver.motoristas")[0] == 1
     assert um(conn, "SELECT count(*) FROM silver.dispositivos")[0] == 1
+
+
+def test_central_simulada_responde_o_historico(conn, enviar, etl):
+    alertas = [
+        {"disparado_em": iso(BASE + timedelta(minutes=m)), "tipo": tipo, "gravidade": grav, "score_fadiga": 80}
+        for m, tipo, grav in [(1, "microssono", "critica"), (3, "sonolencia", "alta"), (5, "distracao", "alta"), (7, "bocejo_excessivo", "media")]
+    ]
+    enviar(lote("dg-edge-0001", "DRV-1000", BASE, alertas=alertas))
+    enviar(lote("dg-edge-0001", "DRV-1000", BASE + timedelta(days=1)))  # fecha o primeiro turno
+    r = etl.handler({"acao": "simular_central", "ate": iso(BASE + timedelta(days=2))}, None)["central"]
+    assert r["alertas_resolvidos"] == 4
+    assert um(conn, "SELECT count(*) FROM silver.alertas WHERE status <> 'resolvido'")[0] == 0
+    tipos = {t for (t,) in todos(conn, "SELECT tipo::text FROM silver.acoes_motorista")}
+    assert tipos <= {"pausa_obrigatoria", "contato_telefonico"}
+    assert um(conn, "SELECT count(*) FROM silver.acoes_motorista WHERE realizado_por IS NOT NULL")[0] == 0
+    # O turno que ficou aberto sem leitura há horas é encerrado; rodar de novo não duplica.
+    assert um(conn, "SELECT count(*) FROM silver.turnos WHERE status = 'em_andamento'")[0] == 0
+    acoes = um(conn, "SELECT count(*) FROM silver.acoes_motorista")[0]
+    etl.handler({"acao": "simular_central", "ate": iso(BASE + timedelta(days=2))}, None)
+    assert um(conn, "SELECT count(*) FROM silver.acoes_motorista")[0] == acoes

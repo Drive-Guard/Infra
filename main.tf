@@ -266,6 +266,8 @@ module "backend" {
 
   site_url        = local.dashboard_url
   email_remetente = var.email_remetente
+  smtp_usuario    = var.email_smtp_usuario
+  smtp_senha      = var.email_smtp_senha
   ia_modelo       = var.ia_modelo
   ia_api_key      = var.ia_api_key
 }
