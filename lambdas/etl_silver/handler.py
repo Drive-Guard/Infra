@@ -816,8 +816,10 @@ def planejar_viagens(conn, turnos: list[dict]) -> int:
                    'planejada'
               FROM jsonb_to_recordset(%s::jsonb) AS x(device text, inicio timestamptz, fim timestamptz, rota text)
               JOIN silver.dispositivos d ON d.device_id = x.device AND d.empresa_id IS NOT NULL
+              -- O vínculo que vale em algum momento da janela (a câmera pode ter
+              -- sido instalada depois do início previsto, como na demonstração).
               JOIN silver.vinculos_dispositivo_veiculo vd
-                ON vd.dispositivo_id = d.id AND vd.inicio <= x.inicio AND (vd.fim IS NULL OR vd.fim > x.inicio)
+                ON vd.dispositivo_id = d.id AND vd.inicio < x.fim AND (vd.fim IS NULL OR vd.fim > x.inicio)
               JOIN silver.veiculos ve ON ve.id = vd.veiculo_id
               JOIN silver.rotas r ON r.empresa_id = d.empresa_id AND r.nome = x.rota
              WHERE x.fim > x.inicio
