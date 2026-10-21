@@ -22,8 +22,16 @@ O estado segue as faixas do modelo de 3 classes: alerta (< 40), fadiga
 (40 a 70) e sonolento (>= 70). Sonolento gera alerta, no máximo um a cada 20
 minutos por câmera.
 
-Desligado por padrão (variável enable_simulador do Terraform). Só usa a
-biblioteca padrão.
+Preenchimento de lacunas: ao ser ligado (scripts/dados_ao_vivo.* manda
+{"preencher": true}) e a cada 15 minutos, pergunta à Lambda do ETL Silver
+(dentro da VPC) a última leitura de cada câmera e manda o que falta até
+agora, com uma leitura a cada 5 minutos: o dia de hoje desde a meia-noite e
+os dias anteriores sem dados, até PREENCHER_MAX_DIAS para trás. A escala e o
+modelo são os mesmos, então o turno preenchido emenda no que segue ao vivo.
+Um estado no S3 evita duas execuções preenchendo a mesma lacuna.
+
+Desligado por padrão (variável enable_simulador do Terraform). Usa a
+biblioteca padrão e o boto3 do runtime (S3 e invocação do ETL).
 """
 
 from __future__ import annotations
@@ -46,6 +54,19 @@ INGEST_URL = os.environ.get("INGEST_URL", "")
 API_KEY = os.environ.get("API_KEY", "")
 CAMERAS = int(os.environ.get("CAMERAS", "16"))
 LEITURAS_POR_LOTE = int(os.environ.get("LEITURAS_POR_LOTE", "1"))
+
+# Preenchimento de lacunas (ver o cabeçalho).
+ETL_SILVER_FUNCTION = os.environ.get("ETL_SILVER_FUNCTION", "")
+ESTADO_BUCKET = os.environ.get("ESTADO_BUCKET", "")
+ESTADO_CHAVE = "simulador/preenchimento.json"
+PREENCHER_MAX_DIAS = int(os.environ.get("PREENCHER_MAX_DIAS", "30"))
+PASSO_PREENCHIMENTO_MIN = int(os.environ.get("PASSO_PREENCHIMENTO_MIN", "5"))
+LACUNA_MINIMA_MIN = 15
+CHECAR_A_CADA_MIN = 15
+# Uma execução preenchendo (ou que acabou de preencher, com o ETL ainda
+# gravando) segura as outras por este tempo.
+TRAVA_MIN = 14
+MAX_LEITURAS_POR_LOTE_PREENCHIMENTO = 500
 
 # Brasília não tem horário de verão desde 2019.
 FUSO = timezone(timedelta(hours=-3))
@@ -215,70 +236,119 @@ def gravidade(s: float) -> str:
     return "critica" if s >= 90 else "alta" if s >= 80 else "media"
 
 
-def montar_lote(agora: datetime, camera: int, rng: random.Random) -> dict | None:
-    """Lote do último minuto da câmera, ou None se o motorista não está dirigindo."""
-    passo = 60 / LEITURAS_POR_LOTE
-    leituras, alertas = [], []
-    for i in range(LEITURAS_POR_LOTE):
-        ts = agora - timedelta(seconds=60 - (i + 1) * passo)
-        s = score(ts, camera, rng)
-        if s is None:
-            continue
-        v = s / 100
-        bocejo = rng.random() < 0.03 + 0.45 * v * v
-        distracao = rng.random() < 0.00015
-        olhos_ms = int(140 + 1300 * v ** 3 + rng.uniform(-30, 30))
-        pitch = rng.uniform(-2, 2) - ((v - 0.6) * 55 if v > 0.6 else 0)
-        leituras.append(
-            {
-                "registrado_em": _iso(ts),
-                "ear": round(min(0.40, max(0.10, 0.33 - 0.17 * v + rng.uniform(-0.01, 0.01))), 4),
-                "mar": round(0.50 + rng.uniform(0, 0.15) if bocejo else 0.16 + rng.uniform(0, 0.08), 4),
-                "perclos": round(min(0.90, max(0.0, 0.03 + 0.55 * v * v + rng.uniform(-0.02, 0.02))), 4),
-                "blink_rate": round(max(4.0, 17 - 6 * v + rng.uniform(-2, 2)), 2),
-                "duracao_olhos_fechados_ms": olhos_ms,
-                "head_pitch": round(pitch, 2),
-                "head_yaw": round(rng.uniform(-5, 5) + (35 if distracao else 0), 2),
-                "head_roll": round(rng.uniform(-3, 3), 2),
-                "score_fadiga": s,
-                "estado": estado(s),
-            }
-        )
-        minuto = int(ts.timestamp() // 60)
-        if s >= 70 and minuto % 20 == camera % 20:
-            tipo = "microssono" if olhos_ms >= 1000 else "cabeca_baixa" if pitch <= -15 else "bocejo_excessivo" if bocejo else "sonolencia"
-            alertas.append(
-                {
-                    "disparado_em": _iso(ts),
-                    "tipo": tipo,
-                    "gravidade": gravidade(s),
-                    "score_fadiga": s,
-                    "mensagem": f"Score de fadiga {s:.0f} (simulador).",
-                }
-            )
-        elif distracao:
-            alertas.append(
-                {
-                    "disparado_em": _iso(ts),
-                    "tipo": "distracao",
-                    "gravidade": "alta",
-                    "score_fadiga": s,
-                    "mensagem": "Olhar fora da estrada por mais de 2 s (simulador).",
-                }
-            )
+def leitura(ts: datetime, camera: int, rng: random.Random, passo_min: int = 1) -> tuple[dict | None, dict | None]:
+    """
+    Leitura da câmera no instante ts e o alerta que ela dispara, se houver.
+    (None, None) quando o motorista não está dirigindo (fora do turno ou na
+    parada).
 
-    if not leituras:
-        return None
+    Alerta de sonolência: no máximo um a cada 20 minutos por câmera, num
+    minuto que depende da câmera. Com `passo_min` > 1 (preenchimento), a
+    regra vale por bloco de leituras, para continuar um a cada 20 minutos.
+    """
+    s = score(ts, camera, rng)
+    if s is None:
+        return None, None
+    v = s / 100
+    bocejo = rng.random() < 0.03 + 0.45 * v * v
+    distracao = rng.random() < 0.00015 * passo_min
+    olhos_ms = int(140 + 1300 * v ** 3 + rng.uniform(-30, 30))
+    pitch = rng.uniform(-2, 2) - ((v - 0.6) * 55 if v > 0.6 else 0)
+    dado = {
+        "registrado_em": _iso(ts),
+        "ear": round(min(0.40, max(0.10, 0.33 - 0.17 * v + rng.uniform(-0.01, 0.01))), 4),
+        "mar": round(0.50 + rng.uniform(0, 0.15) if bocejo else 0.16 + rng.uniform(0, 0.08), 4),
+        "perclos": round(min(0.90, max(0.0, 0.03 + 0.55 * v * v + rng.uniform(-0.02, 0.02))), 4),
+        "blink_rate": round(max(4.0, 17 - 6 * v + rng.uniform(-2, 2)), 2),
+        "duracao_olhos_fechados_ms": olhos_ms,
+        "head_pitch": round(pitch, 2),
+        "head_yaw": round(rng.uniform(-5, 5) + (35 if distracao else 0), 2),
+        "head_roll": round(rng.uniform(-3, 3), 2),
+        "score_fadiga": s,
+        "estado": estado(s),
+    }
+    minuto = int(ts.timestamp() // 60)
+    blocos = max(1, 20 // passo_min)
+    alerta = None
+    if s >= 70 and (minuto // passo_min) % blocos == camera % blocos:
+        tipo = "microssono" if olhos_ms >= 1000 else "cabeca_baixa" if pitch <= -15 else "bocejo_excessivo" if bocejo else "sonolencia"
+        alerta = {
+            "disparado_em": _iso(ts),
+            "tipo": tipo,
+            "gravidade": gravidade(s),
+            "score_fadiga": s,
+            "mensagem": f"Score de fadiga {s:.0f} (simulador).",
+        }
+    elif distracao:
+        alerta = {
+            "disparado_em": _iso(ts),
+            "tipo": "distracao",
+            "gravidade": "alta",
+            "score_fadiga": s,
+            "mensagem": "Olhar fora da estrada por mais de 2 s (simulador).",
+        }
+    return dado, alerta
+
+
+def _envelope(camera: int, enviado_em: datetime) -> dict:
     return {
         "device_id": f"dg-edge-{camera:04d}",
         "schema_version": "1.0",
         "motorista_hash": hash_motorista(f"DRV-{999 + camera}"),
         "veiculo_hash": None,
         "tipo_veiculo": perfil(camera)["tipo"],
-        "enviado_em": _iso(agora),
-        "leituras": leituras,
-        "alertas": alertas,
+        "enviado_em": _iso(enviado_em),
+        "leituras": [],
+        "alertas": [],
     }
+
+
+def montar_lote(agora: datetime, camera: int, rng: random.Random) -> dict | None:
+    """Lote do último minuto da câmera, ou None se o motorista não está dirigindo."""
+    passo = 60 / LEITURAS_POR_LOTE
+    lote = _envelope(camera, agora)
+    for i in range(LEITURAS_POR_LOTE):
+        ts = agora - timedelta(seconds=60 - (i + 1) * passo)
+        dado, alerta = leitura(ts, camera, rng)
+        if dado:
+            lote["leituras"].append(dado)
+        if alerta:
+            lote["alertas"].append(alerta)
+    return lote if lote["leituras"] else None
+
+
+def lotes_da_lacuna(camera: int, de: datetime, ate: datetime, passo_min: int = PASSO_PREENCHIMENTO_MIN) -> list[dict]:
+    """
+    Lotes para preencher o intervalo (de, ate) da câmera, em ordem: um por
+    turno (o ETL abre e fecha cada turno certinho), com no máximo
+    MAX_LEITURAS_POR_LOTE_PREENCHIMENTO leituras. As leituras caem em minutos
+    múltiplos de `passo_min`, os mesmos minutos do ao vivo, então uma leitura
+    repetida é descartada pela constraint (device_id, registrado_em).
+    """
+    passo = timedelta(minutes=passo_min)
+    base = de.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    resto = int(base.timestamp() // 60) % passo_min
+    ts = base + timedelta(minutes=(passo_min - resto) % passo_min)
+    if ts <= de:
+        ts += passo
+    lotes: list[dict] = []
+    atual, turno_atual_inicio = None, None
+    while ts < ate:
+        turno = turno_atual(camera, ts)
+        if turno is not None:
+            # Semente por câmera e minuto: preencher de novo gera o mesmo dado.
+            rng = random.Random(camera * 1_000_003 + int(ts.timestamp() // 60))
+            dado, alerta = leitura(ts, camera, rng, passo_min)
+            if dado:
+                if atual is None or turno["inicio"] != turno_atual_inicio or len(atual["leituras"]) >= MAX_LEITURAS_POR_LOTE_PREENCHIMENTO:
+                    atual = _envelope(camera, ts)
+                    turno_atual_inicio = turno["inicio"]
+                    lotes.append(atual)
+                atual["leituras"].append(dado)
+                if alerta:
+                    atual["alertas"].append(alerta)
+        ts += passo
+    return lotes
 
 
 def enviar(lote: dict) -> int:
@@ -290,6 +360,98 @@ def enviar(lote: dict) -> int:
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.status
+
+
+def _parse(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+def _ler_estado() -> dict:
+    if not ESTADO_BUCKET:
+        return {}
+    import boto3  # do runtime da Lambda
+
+    try:
+        obj = boto3.client("s3").get_object(Bucket=ESTADO_BUCKET, Key=ESTADO_CHAVE)
+        return json.loads(obj["Body"].read())
+    except Exception:  # ainda não existe (ou não deu para ler): começa do zero
+        return {}
+
+
+def _gravar_estado(estado_atual: dict) -> None:
+    if not ESTADO_BUCKET:
+        return
+    import boto3
+
+    boto3.client("s3").put_object(
+        Bucket=ESTADO_BUCKET, Key=ESTADO_CHAVE, Body=json.dumps(estado_atual).encode("utf-8"), ContentType="application/json"
+    )
+
+
+def _ultimas_leituras(devices: list[str]) -> dict:
+    """Pergunta ao ETL Silver (dentro da VPC) a última leitura de cada câmera."""
+    import boto3
+
+    r = boto3.client("lambda").invoke(
+        FunctionName=ETL_SILVER_FUNCTION,
+        Payload=json.dumps({"acao": "ultimas_leituras", "devices": devices}).encode("utf-8"),
+    )
+    corpo = json.loads(r["Payload"].read())
+    if r.get("FunctionError"):
+        raise RuntimeError(f"ETL nao respondeu as ultimas leituras: {str(corpo)[:300]}")
+    return corpo.get("ultimas", {})
+
+
+def meia_noite(ts: datetime) -> datetime:
+    """00:00 de Brasília do dia de ts."""
+    local = ts.astimezone(FUSO)
+    return datetime(local.year, local.month, local.day, tzinfo=FUSO)
+
+
+def preencher_lacunas(agora: datetime, forcar: bool = False) -> dict:
+    """
+    Manda o que falta entre a última leitura de cada câmera e agora. Sem
+    leitura nenhuma, começa na meia-noite de hoje; lacuna mais antiga que
+    PREENCHER_MAX_DIAS começa na meia-noite de lá.
+    """
+    if not ETL_SILVER_FUNCTION:
+        return {"preenchimento": "desligado (sem ETL_SILVER_FUNCTION)"}
+    estado_ant = _ler_estado()
+    if estado_ant.get("inicio"):
+        desde = (agora - _parse(estado_ant["inicio"])).total_seconds() / 60
+        em_andamento = not estado_ant.get("fim")
+        if desde < TRAVA_MIN and (em_andamento or not forcar):
+            return {"preenchimento": "ignorado", "motivo": "outro preenchimento recente", "estado": estado_ant}
+    _gravar_estado({"inicio": _iso(agora)})
+
+    devices = [f"dg-edge-{c:04d}" for c in range(1, CAMERAS + 1)]
+    ultimas = _ultimas_leituras(devices)
+    limite = meia_noite(agora - timedelta(days=PREENCHER_MAX_DIAS))
+    ate = agora.replace(second=0, microsecond=0)  # o minuto atual é do ao vivo
+    lotes, leituras, falhas, por_camera = 0, 0, [], {}
+    for camera in range(1, CAMERAS + 1):
+        ultima = ultimas.get(f"dg-edge-{camera:04d}")
+        de = max(_parse(ultima), limite) if ultima else meia_noite(agora)
+        if (ate - de).total_seconds() / 60 < LACUNA_MINIMA_MIN:
+            continue
+        enviados_camera = 0
+        for lote in lotes_da_lacuna(camera, de, ate):
+            for tentativa in range(2):
+                try:
+                    enviar(lote)
+                    lotes += 1
+                    leituras += len(lote["leituras"])
+                    enviados_camera += len(lote["leituras"])
+                    break
+                except Exception as exc:
+                    if tentativa == 1:
+                        falhas.append({"camera": camera, "erro": str(exc)[:200]})
+        por_camera[camera] = {"de": _iso(de), "leituras": enviados_camera}
+
+    resumo = {"inicio": _iso(agora), "fim": _iso(datetime.now(timezone.utc)), "lotes": lotes, "leituras": leituras, "falhas": falhas[:10]}
+    _gravar_estado(resumo)
+    logger.info("Preenchimento: %d lotes, %d leituras, %d câmeras, falhas: %s", lotes, leituras, len(por_camera), falhas[:5])
+    return {"preenchimento": resumo, "cameras": por_camera}
 
 
 def handler(event, context):
@@ -313,4 +475,15 @@ def handler(event, context):
             falhas.append({"camera": camera, "erro": str(exc)[:200]})
 
     logger.info("Lotes enviados: %d, fora do turno: %d, falhas: %s", enviados, fora_do_turno, falhas)
-    return {"enviados": enviados, "fora_do_turno": fora_do_turno, "falhas": falhas}
+    resultado = {"enviados": enviados, "fora_do_turno": fora_do_turno, "falhas": falhas}
+
+    # Depois do ao vivo (que não pode atrasar): lacunas, quando pedido ou a cada 15 min.
+    pedido = isinstance(event, dict) and bool(event.get("preencher"))
+    if pedido or int(agora.timestamp() // 60) % CHECAR_A_CADA_MIN == 3:
+        try:
+            resultado["lacunas"] = preencher_lacunas(agora, forcar=pedido)
+        except Exception as exc:  # o ao vivo já foi; a próxima checagem tenta de novo
+            logger.exception("Falha no preenchimento de lacunas")
+            _gravar_estado({})
+            resultado["lacunas"] = {"erro": str(exc)[:300]}
+    return resultado

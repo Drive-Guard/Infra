@@ -46,3 +46,19 @@ variable "ativo" {
   type        = bool
   default     = true
 }
+
+variable "etl_silver_function" {
+  description = "Lambda do ETL Silver, que responde a última leitura de cada câmera (preenchimento de lacunas)."
+  type        = string
+}
+
+variable "estado_bucket" {
+  description = "Bucket onde fica o estado do preenchimento de lacunas (simulador/preenchimento.json)."
+  type        = string
+}
+
+variable "preencher_max_dias" {
+  description = "Até quantos dias para trás o simulador preenche quando encontra uma lacuna."
+  type        = number
+  default     = 30
+}

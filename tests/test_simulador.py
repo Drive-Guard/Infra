@@ -107,3 +107,73 @@ def test_estados_em_tres_niveis():
     simulador = carregar_lambda("simulador")
     assert [simulador.estado(s) for s in (10, 39.9, 40, 69.9, 70, 95)] == [
         "alerta", "alerta", "fadiga", "fadiga", "sonolento", "sonolento"]
+
+
+# ---------------------------------------------------------------------------
+# Preenchimento de lacunas
+# ---------------------------------------------------------------------------
+
+
+def _parse(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+def test_lacuna_vira_um_lote_por_turno_so_dentro_do_intervalo():
+    simulador = carregar_lambda("simulador")
+    ingest = carregar_lambda("ingest")
+    de = datetime(2026, 10, 14, 3, 7, tzinfo=timezone.utc)
+    ate = datetime(2026, 10, 17, 1, 0, tzinfo=timezone.utc)
+    for camera in (1, 2, 5):
+        lotes = simulador.lotes_da_lacuna(camera, de, ate)
+        assert lotes, f"câmera {camera} sem turno em 3 dias"
+        inicios = set()
+        anterior = None
+        for lote in lotes:
+            assert ingest._validar(lote) == []
+            ts = [_parse(l["registrado_em"]) for l in lote["leituras"]]
+            assert all(de < t < ate for t in ts)
+            assert all(int(t.timestamp() // 60) % 5 == 0 and t.second == 0 for t in ts)
+            # Em ordem e sem misturar turnos num lote.
+            assert ts == sorted(ts) and (anterior is None or ts[0] > anterior)
+            anterior = ts[-1]
+            turnos = {simulador.turno_atual(camera, t)["inicio"] for t in ts}
+            assert len(turnos) == 1
+            inicios |= turnos
+            # Alerta de sonolência no máximo a cada 20 min.
+            sono = sorted(_parse(a["disparado_em"]) for a in lote["alertas"] if a["tipo"] != "distracao")
+            assert all((b - a) >= timedelta(minutes=20) for a, b in zip(sono, sono[1:]))
+        assert len(inicios) == len(lotes)
+
+
+def test_preencher_comeca_na_ultima_leitura_ou_na_meia_noite(monkeypatch):
+    simulador = carregar_lambda("simulador")
+    agora = datetime(2026, 10, 21, 1, 30, tzinfo=timezone.utc)  # 22h30 de 20/10 em Brasília
+    monkeypatch.setattr(simulador, "ETL_SILVER_FUNCTION", "etl")
+    monkeypatch.setattr(simulador, "CAMERAS", 3)
+    estado = {}
+    monkeypatch.setattr(simulador, "_ler_estado", lambda: dict(estado))
+    monkeypatch.setattr(simulador, "_gravar_estado", lambda e: (estado.clear(), estado.update(e)))
+    ontem = "2026-10-19T12:00:00+00:00"
+    recente = (agora - timedelta(minutes=5)).isoformat()
+    monkeypatch.setattr(simulador, "_ultimas_leituras", lambda devices: {"dg-edge-0001": ontem, "dg-edge-0002": None, "dg-edge-0003": recente})
+    enviados = []
+    monkeypatch.setattr(simulador, "enviar", lambda lote: enviados.append(lote) or 202)
+
+    r = simulador.preencher_lacunas(agora, forcar=True)
+    por_device = {}
+    for lote in enviados:
+        por_device.setdefault(lote["device_id"], []).extend(_parse(l["registrado_em"]) for l in lote["leituras"])
+    # Câmera 1 desde a última leitura; câmera 2, sem dado, desde a meia-noite de hoje (Brasília);
+    # câmera 3 com leitura há 5 min: nada a preencher.
+    if "dg-edge-0001" in por_device:
+        assert min(por_device["dg-edge-0001"]) > _parse(ontem)
+    if "dg-edge-0002" in por_device:
+        assert min(por_device["dg-edge-0002"]) >= datetime(2026, 10, 20, 0, 0, tzinfo=FUSO)
+    assert "dg-edge-0003" not in por_device
+    assert all(max(v) < agora for v in por_device.values())
+    assert r["preenchimento"]["lotes"] == len(enviados) and estado.get("fim")
+
+    # Logo em seguida, a checagem periódica não preenche de novo (o ETL ainda está gravando).
+    enviados.clear()
+    r2 = simulador.preencher_lacunas(agora + timedelta(minutes=2))
+    assert r2["preenchimento"] == "ignorado" and enviados == []

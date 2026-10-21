@@ -6,6 +6,11 @@
 # posta um lote por câmera do seed na API de ingestão, com a API Key dos
 # dispositivos; todo o caminho depois dela (Bronze, ETL, Gold) é o real.
 #
+# Também preenche lacunas (ambiente que ficou desligado, simulador religado):
+# pergunta ao ETL Silver a última leitura de cada câmera e manda o que falta
+# até agora, até 30 dias. O estado do preenchimento fica no bucket de
+# artefatos, em simulador/preenchimento.json.
+#
 # O módulo raiz só o cria depois da migração do banco, para os primeiros
 # lotes já encontrarem as tabelas.
 ###############################################################################
@@ -39,15 +44,19 @@ resource "aws_lambda_function" "simulador" {
   filename         = data.archive_file.simulador.output_path
   source_code_hash = data.archive_file.simulador.output_base64sha256
 
-  timeout     = 30
-  memory_size = 128
+  # O ao vivo leva segundos; o preenchimento de vários dias, alguns minutos.
+  timeout     = 600
+  memory_size = 256
 
   environment {
     variables = {
-      INGEST_URL        = var.ingest_url
-      API_KEY           = var.api_key
-      CAMERAS           = tostring(var.cameras)
-      LEITURAS_POR_LOTE = "1"
+      INGEST_URL          = var.ingest_url
+      API_KEY             = var.api_key
+      CAMERAS             = tostring(var.cameras)
+      LEITURAS_POR_LOTE   = "1"
+      ETL_SILVER_FUNCTION = var.etl_silver_function
+      ESTADO_BUCKET       = var.estado_bucket
+      PREENCHER_MAX_DIAS  = tostring(var.preencher_max_dias)
     }
   }
 

@@ -200,6 +200,13 @@ def test_camera_e_motorista_arquivados_voltam_quando_enviam(conn, enviar):
     assert um(conn, "SELECT arquivado_em FROM silver.motoristas WHERE motorista_hash = %s", (sha("DRV-1000"),)) == (None,)
 
 
+def test_ultimas_leituras_por_camera(conn, enviar, etl):
+    enviar(lote("dg-edge-0900", "DRV-9000", BASE))
+    r = etl.handler({"acao": "ultimas_leituras", "devices": ["dg-edge-0900", "Dg_Edge_0901"]}, None)
+    assert datetime.fromisoformat(r["ultimas"]["dg-edge-0900"]) == BASE + timedelta(minutes=9)
+    assert r["ultimas"]["dg-edge-0901"] is None
+
+
 def test_mesmo_arquivo_nao_e_processado_duas_vezes(conn, enviar):
     envelope = lote("dg-edge-0900", "DRV-9000", BASE)
     enviar(envelope, key="eventos/fixo.json")

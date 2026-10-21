@@ -596,6 +596,14 @@ rm -f "$SAIDA_APPLY"
 # 7. Pronto
 # ============================================================================
 
+# Lab que ficou desligado deixa um buraco nos dados: com o simulador ligado,
+# ele preenche do último dado de cada câmera até agora (assíncrono).
+if [ "$(aws events describe-rule --name driveguard-dev-simulador --query State --output text 2>/dev/null)" = "ENABLED" ]; then
+  aws lambda invoke --function-name driveguard-dev-simulador --invocation-type Event \
+    --cli-binary-format raw-in-base64-out --payload '{"preencher": true}' /dev/null >/dev/null 2>&1 \
+    && info "simulador preenchendo os dados que faltam até agora (alguns minutos)"
+fi
+
 etapa "Conferindo o dashboard"
 URL="$(terraform output -raw dashboard_url 2>/dev/null || true)"
 API="$(terraform output -raw backend_api_url 2>/dev/null || true)"

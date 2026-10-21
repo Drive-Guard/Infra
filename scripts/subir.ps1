@@ -680,6 +680,16 @@ if (-not $sucesso) { Falhar "o terraform apply falhou 3 vezes. O erro está logo
 # 7. Pronto
 # ============================================================================
 
+# Lab que ficou desligado deixa um buraco nos dados: com o simulador ligado,
+# ele preenche do último dado de cada câmera até agora (assíncrono).
+$regraSimulador = "driveguard-dev-simulador"
+if ((Exec $EXE_aws @("events", "describe-rule", "--name", $regraSimulador, "--query", "State", "--output", "text")).Saida.Trim() -eq "ENABLED") {
+    $evento = Join-Path $env:TEMP "driveguard-preencher.json"
+    [IO.File]::WriteAllText($evento, '{"preencher": true}')
+    $r = Exec $EXE_aws @("lambda", "invoke", "--function-name", $regraSimulador, "--invocation-type", "Event", "--payload", "fileb://$evento", (Join-Path $env:TEMP "driveguard-preencher-saida.json"))
+    if ($r.Codigo -eq 0) { Info "simulador preenchendo os dados que faltam até agora (alguns minutos)" }
+}
+
 Etapa "Conferindo o dashboard"
 $url = (Exec $EXE_terraform @("output", "-raw", "dashboard_url")).Saida.Trim()
 $api = (Exec $EXE_terraform @("output", "-raw", "backend_api_url")).Saida.Trim()

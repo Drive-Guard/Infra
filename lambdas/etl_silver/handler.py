@@ -633,7 +633,38 @@ def _registros(event) -> list:
     return []
 
 
+def ultimas_leituras(conn, devices: list[str]) -> dict:
+    """
+    Última leitura gravada de cada câmera (o simulador pergunta antes de
+    preencher lacunas: ele fica fora da VPC e não enxerga o banco). O índice
+    único (device_id, registrado_em) responde cada MAX sem varrer a tabela.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT d, (SELECT MAX(l.registrado_em) FROM silver.leituras_fadiga l WHERE l.device_id = d)
+              FROM unnest(%s::text[]) AS d
+            """,
+            ([normalizar_dispositivo(d) for d in devices],),
+        )
+        linhas = cur.fetchall()
+        conn.rollback()  # só leitura: não deixa transação aberta na conexão reaproveitada
+    finally:
+        cur.close()
+    return {d: (ts.isoformat() if ts else None) for d, ts in linhas}
+
+
 def handler(event, context):
+    # Pergunta direta (lambda invoke), não evento do S3.
+    if isinstance(event, dict) and event.get("acao") == "ultimas_leituras":
+        try:
+            conn = get_connection()
+        except Exception:
+            reset_connection()
+            raise
+        return {"ultimas": ultimas_leituras(conn, list(event.get("devices") or []))}
+
     registros = _registros(event)
     logger.info("Recebidos %d objetos do S3", len(registros))
 

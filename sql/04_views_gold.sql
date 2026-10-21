@@ -457,11 +457,15 @@ COMMENT ON MATERIALIZED VIEW gold.mv_ranking_motoristas IS
 DROP MATERIALIZED VIEW IF EXISTS gold.mv_rotas_desempenho CASCADE;
 
 CREATE MATERIALIZED VIEW gold.mv_rotas_desempenho AS
+-- Por região do motorista e tipo do veículo, como mv_kpis_diarios: a lista de
+-- rotas obedece aos mesmos filtros do resto da tela.
 WITH agg_leituras AS (
     SELECT
         r.empresa_id,
         r.id                                     AS rota_id,
         gold.fn_local(l.registrado_em)::DATE     AS dia,
+        COALESCE(m.regiao_uf, 'ND')              AS regiao_uf,
+        COALESCE(v.tipo::TEXT, 'nd')             AS tipo_veiculo,
         COUNT(DISTINCT t.id)                     AS turnos,
         COUNT(*)                                 AS leituras,
         SUM(l.score_fadiga)                      AS soma_score,
@@ -470,30 +474,39 @@ WITH agg_leituras AS (
     JOIN silver.turnos  t  ON t.id = l.turno_id
     JOIN silver.viagens vg ON vg.id = t.viagem_id
     JOIN silver.rotas   r  ON r.id = vg.rota_id
-    GROUP BY 1, 2, 3
+    JOIN silver.motoristas m ON m.id = t.motorista_id
+    LEFT JOIN silver.veiculos v ON v.id = t.veiculo_id
+    GROUP BY 1, 2, 3, 4, 5
 ),
 agg_alertas AS (
     SELECT
         r.empresa_id,
         r.id                                     AS rota_id,
         gold.fn_local(a.disparado_em)::DATE      AS dia,
+        COALESCE(m.regiao_uf, 'ND')              AS regiao_uf,
+        COALESCE(v.tipo::TEXT, 'nd')             AS tipo_veiculo,
         COUNT(*)                                 AS alertas,
         COUNT(*) FILTER (WHERE a.gravidade IN ('alta', 'critica')) AS alertas_graves
     FROM silver.alertas a
     JOIN silver.turnos  t  ON t.id = a.turno_id
     JOIN silver.viagens vg ON vg.id = t.viagem_id
     JOIN silver.rotas   r  ON r.id = vg.rota_id
-    GROUP BY 1, 2, 3
+    JOIN silver.motoristas m ON m.id = t.motorista_id
+    LEFT JOIN silver.veiculos v ON v.id = t.veiculo_id
+    GROUP BY 1, 2, 3, 4, 5
 ),
 chaves AS (
-    SELECT empresa_id, rota_id, dia FROM agg_leituras
+    SELECT empresa_id, rota_id, dia, regiao_uf, tipo_veiculo FROM agg_leituras
     UNION
-    SELECT empresa_id, rota_id, dia FROM agg_alertas
+    SELECT empresa_id, rota_id, dia, regiao_uf, tipo_veiculo FROM agg_alertas
 )
 SELECT
     k.empresa_id,
     k.rota_id,
     k.dia,
+    k.regiao_uf,
+    COALESCE(u.macro_regiao, 'ND')     AS macro_regiao,
+    k.tipo_veiculo,
     COALESCE(l.turnos, 0)              AS turnos,
     COALESCE(l.leituras, 0)            AS leituras,
     COALESCE(l.soma_score, 0)          AS soma_score,
@@ -502,14 +515,15 @@ SELECT
     COALESCE(a.alertas_graves, 0)      AS alertas_graves,
     now()                              AS atualizado_em
 FROM chaves k
-LEFT JOIN agg_leituras l ON l.rota_id = k.rota_id AND l.dia = k.dia
-LEFT JOIN agg_alertas  a ON a.rota_id = k.rota_id AND a.dia = k.dia;
+LEFT JOIN agg_leituras l ON l.rota_id = k.rota_id AND l.dia = k.dia AND l.regiao_uf = k.regiao_uf AND l.tipo_veiculo = k.tipo_veiculo
+LEFT JOIN agg_alertas  a ON a.rota_id = k.rota_id AND a.dia = k.dia AND a.regiao_uf = k.regiao_uf AND a.tipo_veiculo = k.tipo_veiculo
+LEFT JOIN silver.dim_uf u ON u.uf = k.regiao_uf;
 
-CREATE UNIQUE INDEX ux_mv_rotas_desempenho ON gold.mv_rotas_desempenho (rota_id, dia);
+CREATE UNIQUE INDEX ux_mv_rotas_desempenho ON gold.mv_rotas_desempenho (rota_id, dia, regiao_uf, tipo_veiculo);
 CREATE INDEX ix_mv_rotas_desempenho_empresa ON gold.mv_rotas_desempenho (empresa_id, dia);
 
 COMMENT ON MATERIALIZED VIEW gold.mv_rotas_desempenho IS
-    'Fadiga e alertas por rota e dia. A API calcula o período, o risco e a variação contra o período anterior.';
+    'Fadiga e alertas por rota, dia, UF do motorista e tipo de veículo. A API soma no período e calcula o risco e a variação.';
 
 -- =============================================================================
 -- PRF (refresh quando chega arquivo novo da PRF)

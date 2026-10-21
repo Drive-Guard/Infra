@@ -727,6 +727,15 @@ em diante é o caminho de produção). Para ligar ou desligar sem Terraform:
 ./scripts/dados_ao_vivo.ps1 -Ligar      # (ou .sh ligar)
 ```
 
+**Lacunas (lab desligado, simulador pausado):** ao ligar (`-Ligar`), ao fim do
+`subir` e sozinho a cada 15 minutos, o simulador preenche o que faltou: de cada câmera,
+do último dado no banco (ou da meia-noite de hoje, se não houver nenhum) até agora,
+olhando no máximo `preencher_max_dias` (padrão 30) para trás. Ligou às 22h sem dados
+hoje: a dashboard já abre com o dia desde 0h, e dali para frente segue ao vivo. O
+preenchimento usa uma leitura a cada 5 minutos (o ao vivo é de 1 em 1), roda
+assíncrono (alguns minutos) e guarda o resumo da última execução em
+`s3://<bucket de artefatos>/simulador/preenchimento.json`.
+
 O estado inicial vem de `dados_ao_vivo` (padrão `true`); o `apply` seguinte não desfaz
 a escolha feita pelo script. Desligado, o dashboard mostra o histórico e nada
 "dirigindo agora" (os turnos da hora da injeção somem do "ao vivo" em 30 minutos).

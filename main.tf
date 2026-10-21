@@ -297,15 +297,17 @@ module "simulador" {
   source = "./modules/simulador"
   count  = var.enable_simulador ? 1 : 0
 
-  name_prefix        = local.name_prefix
-  build_dir          = local.build_dir
-  lambda_role_arn    = local.lambda_role_arn
-  lambda_runtime     = var.lambda_runtime
-  ingest_url         = module.ingest.invoke_url
-  api_key            = module.ingest.api_key_value
-  cameras            = var.simulador_cameras
-  ativo              = var.dados_ao_vivo
-  log_retention_days = var.lambda_log_retention_days
+  name_prefix         = local.name_prefix
+  build_dir           = local.build_dir
+  lambda_role_arn     = local.lambda_role_arn
+  lambda_runtime      = var.lambda_runtime
+  ingest_url          = module.ingest.invoke_url
+  api_key             = module.ingest.api_key_value
+  cameras             = var.simulador_cameras
+  etl_silver_function = module.etl.etl_silver_function_name
+  estado_bucket       = module.storage.artifacts_bucket_id
+  ativo               = var.dados_ao_vivo
+  log_retention_days  = var.lambda_log_retention_days
 
   # Os primeiros lotes precisam encontrar o schema já migrado.
   depends_on = [module.etl]
