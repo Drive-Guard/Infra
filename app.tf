@@ -48,6 +48,9 @@ resource "null_resource" "deploy_backend" {
     api    = module.backend.api_id
     banco  = module.database.address
     stage  = var.environment
+    # O serverless lê o SSM no deploy: configuração nova (ex.: o Gmail dos
+    # relatórios) precisa de um deploy novo. A senha entra só como hash.
+    config = sha256(join("|", [var.email_smtp_usuario, nonsensitive(sha256(var.email_smtp_senha)), var.email_remetente, var.ia_modelo]))
   }
 
   provisioner "local-exec" {
