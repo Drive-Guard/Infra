@@ -410,6 +410,78 @@ def _resolver_turno(cur, motorista_id, veiculo_id, device_id, dispositivo_id,
     return turno_id
 
 
+def _fim_efetivo_sql(alias: str) -> str:
+    return (
+        f"COALESCE({alias}.finalizado_em, (SELECT MAX(l.registrado_em) FROM silver.leituras_fadiga l "
+        f"WHERE l.turno_id = {alias}.id), {alias}.iniciado_em)"
+    )
+
+
+def _fundir_turnos_vizinhos(cur, motorista_id, turno_id):
+    """
+    Junta ao turno os turnos do mesmo motorista e caminhão que encostam nele
+    (menos de GAP_NOVO_TURNO_MINUTOS entre um e outro): é a mesma jornada que chegou em
+    pedaços. Acontece quando os lotes chegam fora de ordem (o ETL roda em
+    paralelo) ou quando o simulador preenche uma lacuna no meio do turno.
+    Fica o turno que começou antes; leituras, alertas, ações e ocorrências do
+    outro passam para ele. Devolve o turno que ficou.
+    """
+    while True:
+        cur.execute(
+            f"""
+            SELECT o.id
+              FROM silver.turnos a
+              JOIN silver.turnos o ON o.motorista_id = a.motorista_id AND o.id <> a.id
+             WHERE a.id = %s
+               -- Troca de caminhão é turno novo, como no ao vivo.
+               AND (o.veiculo_id IS NULL OR a.veiculo_id IS NULL OR o.veiculo_id = a.veiculo_id)
+               AND o.iniciado_em <= {_fim_efetivo_sql("a")} + make_interval(mins => %s)
+               AND {_fim_efetivo_sql("o")} >= a.iniciado_em - make_interval(mins => %s)
+             ORDER BY o.iniciado_em
+             LIMIT 1
+            """,
+            (turno_id, GAP_NOVO_TURNO_MINUTOS, GAP_NOVO_TURNO_MINUTOS),
+        )
+        row = cur.fetchone()
+        if not row:
+            return turno_id
+        cur.execute(
+            f"""
+            SELECT id, iniciado_em, {_fim_efetivo_sql("t")}, status::text, viagem_id,
+                   origem_cidade, origem_uf, destino_cidade, destino_uf, distancia_km
+              FROM silver.turnos t WHERE id IN (%s, %s)
+             ORDER BY iniciado_em, criado_em
+            """,
+            (turno_id, row[0]),
+        )
+        fica, sai = cur.fetchall()
+        for tabela in ("leituras_fadiga", "alertas", "acoes_motorista", "incidentes"):
+            cur.execute(f"UPDATE silver.{tabela} SET turno_id = %s WHERE turno_id = %s", (fica[0], sai[0]))
+        aberto = "em_andamento" in (fica[3], sai[3])
+        # Apaga antes de atualizar: só pode haver um turno aberto por motorista.
+        cur.execute("DELETE FROM silver.turnos WHERE id = %s", (sai[0],))
+        cur.execute(
+            """
+            UPDATE silver.turnos
+               SET status         = %s::silver.status_turno,
+                   finalizado_em  = %s,
+                   viagem_id      = COALESCE(viagem_id, %s),
+                   origem_cidade  = COALESCE(origem_cidade, %s),
+                   origem_uf      = COALESCE(origem_uf, %s),
+                   destino_cidade = COALESCE(destino_cidade, %s),
+                   destino_uf     = COALESCE(destino_uf, %s),
+                   distancia_km   = COALESCE(distancia_km, %s)
+             WHERE id = %s
+            """,
+            (
+                "em_andamento" if aberto else "concluido",
+                None if aberto else max(fica[2], sai[2]),
+                sai[4], sai[5], sai[6], sai[7], sai[8], sai[9], fica[0],
+            ),
+        )
+        turno_id = fica[0]
+
+
 def _inserir_leituras(cur, contexto, leituras, ingest_id, bronze_key) -> int:
     linhas = []
     for l in leituras:
@@ -539,6 +611,10 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
             cur, empresa_id, payload.get("veiculo_hash"), payload.get("tipo_veiculo")
         )
 
+        # Um lote por motorista de cada vez: lotes do mesmo turno processados
+        # em paralelo não abrem dois turnos.
+        cur.execute("SELECT 1 FROM silver.motoristas WHERE id = %s FOR UPDATE", (motorista_id,))
+
         turno_id = _resolver_turno(
             cur,
             motorista_id,
@@ -559,6 +635,7 @@ def _processar_objeto(conn, bucket: str, key: str) -> dict:
 
         n_leituras = _inserir_leituras(cur, contexto, leituras, ingest_id, key)
         n_alertas = _inserir_alertas(cur, contexto, alertas)
+        turno_id = _fundir_turnos_vizinhos(cur, motorista_id, turno_id)
 
         cur.execute(
             """
@@ -655,15 +732,221 @@ def ultimas_leituras(conn, devices: list[str]) -> dict:
     return {d: (ts.isoformat() if ts else None) for d, ts in linhas}
 
 
-def handler(event, context):
-    # Pergunta direta (lambda invoke), não evento do S3.
-    if isinstance(event, dict) and event.get("acao") == "ultimas_leituras":
-        try:
-            conn = get_connection()
-        except Exception:
-            reset_connection()
-            raise
+# ---------------------------------------------------------------------------
+# Manutenção pedida pela Lambda simulador (lambda invoke, fora do S3)
+#
+# O simulador fica fora da VPC e não enxerga o banco: pergunta aqui o quanto
+# de cada turno da escala já existe, pede a limpeza do que vai regenerar e as
+# viagens planejadas (de onde o turno tira a rota).
+# ---------------------------------------------------------------------------
+
+def cobertura(conn, turnos: list[dict]) -> list[dict]:
+    """
+    Para cada turno da escala {device, inicio, fim, rota}: quantos blocos de
+    5 minutos têm leitura e se ele é "protegido" (alguém da central agiu
+    nele: ação, ocorrência ou alerta respondido), caso em que não é apagado.
+    Os incompletos ganham a viagem planejada da rota, se não houver uma.
+    """
+    if not turnos:
+        return []
+    linhas = [
+        {"ord": i, "device": normalizar_dispositivo(t["device"]), "inicio": t["inicio"], "fim": t["fim"], "rota": t.get("rota")}
+        for i, t in enumerate(turnos)
+    ]
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT x.ord,
+                   (SELECT COUNT(DISTINCT floor(extract(epoch FROM l.registrado_em) / 300))
+                      FROM silver.leituras_fadiga l
+                     WHERE l.device_id = x.device AND l.registrado_em >= x.inicio AND l.registrado_em < x.fim) AS blocos,
+                   EXISTS (
+                       SELECT 1 FROM silver.turnos t
+                        WHERE t.device_id = x.device AND t.iniciado_em < x.fim
+                          AND COALESCE(t.finalizado_em, 'infinity'::timestamptz) > x.inicio
+                          AND (EXISTS (SELECT 1 FROM silver.acoes_motorista a WHERE a.turno_id = t.id AND a.realizado_por IS NOT NULL)
+                               OR EXISTS (SELECT 1 FROM silver.incidentes i WHERE i.turno_id = t.id AND i.registrado_por IS NOT NULL)
+                               OR EXISTS (SELECT 1 FROM silver.alertas al WHERE al.turno_id = t.id AND al.reconhecido_por IS NOT NULL))
+                   ) AS protegido
+              FROM jsonb_to_recordset(%s::jsonb) AS x(ord int, device text, inicio timestamptz, fim timestamptz, rota text)
+            """,
+            (json.dumps(linhas),),
+        )
+        resultado = {ord_: {"blocos": n, "protegido": prot} for ord_, n, prot in cur.fetchall()}
+        conn.rollback()
+    finally:
+        cur.close()
+    return [resultado[i] for i in range(len(linhas))]
+
+
+def planejar_viagens(conn, turnos: list[dict]) -> int:
+    """
+    Viagem planejada da rota para cada turno {device, inicio, fim, rota} que
+    ainda não tem uma (o veículo vem do vínculo da câmera naquela hora).
+    """
+    if not turnos:
+        return 0
+    linhas = [
+        {"device": normalizar_dispositivo(t["device"]), "inicio": t["inicio"], "fim": t["fim"], "rota": t["rota"]}
+        for t in turnos if t.get("rota")
+    ]
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO silver.viagens (empresa_id, rota_id, veiculo_id, partida_prevista, chegada_prevista, valor_viagem, status)
+            SELECT d.empresa_id, r.id, vd.veiculo_id, x.inicio, x.fim,
+                   ROUND((extract(epoch FROM x.fim - x.inicio) / 3600 * 70
+                          * CASE ve.tipo WHEN 'onibus' THEN 9.5 WHEN 'van' THEN 4.0 ELSE 7.0 END)::numeric, 2),
+                   'planejada'
+              FROM jsonb_to_recordset(%s::jsonb) AS x(device text, inicio timestamptz, fim timestamptz, rota text)
+              JOIN silver.dispositivos d ON d.device_id = x.device AND d.empresa_id IS NOT NULL
+              JOIN silver.vinculos_dispositivo_veiculo vd
+                ON vd.dispositivo_id = d.id AND vd.inicio <= x.inicio AND (vd.fim IS NULL OR vd.fim > x.inicio)
+              JOIN silver.veiculos ve ON ve.id = vd.veiculo_id
+              JOIN silver.rotas r ON r.empresa_id = d.empresa_id AND r.nome = x.rota
+             WHERE x.fim > x.inicio
+               AND NOT EXISTS (
+                   SELECT 1 FROM silver.viagens v
+                    WHERE v.veiculo_id = vd.veiculo_id
+                      AND v.partida_prevista BETWEEN x.inicio - interval '3 hours' AND x.inicio + interval '3 hours')
+            """,
+            (json.dumps(linhas),),
+        )
+        n = cur.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+    return n
+
+
+def _liberar_viagens(cur, viagens) -> None:
+    """Viagens dos turnos apagados voltam a planejadas, para o turno regenerado casar com elas."""
+    ids = [v for v in viagens if v]
+    if ids:
+        cur.execute(
+            """
+            UPDATE silver.viagens SET status = 'planejada', partida_real = NULL, chegada_real = NULL
+             WHERE id = ANY(%s::uuid[])
+            """,
+            (ids,),
+        )
+
+
+def limpar(conn, intervalos: list[dict]) -> dict:
+    """
+    Apaga a telemetria de cada câmera no intervalo {device, de, ate}: os
+    turnos que se sobrepõem a ele (com leituras e alertas, em cascata) e o
+    que sobrar de leitura e alerta solto. O simulador só pede isto para
+    turnos que vai regenerar e que ninguém da central tocou.
+    """
+    cur = conn.cursor()
+    turnos = leituras = 0
+    try:
+        for it in intervalos:
+            device = normalizar_dispositivo(it["device"])
+            cur.execute(
+                f"""
+                DELETE FROM silver.turnos t
+                 WHERE t.device_id = %s AND t.iniciado_em < %s AND {_fim_efetivo_sql("t")} >= %s
+                RETURNING t.viagem_id
+                """,
+                (device, it["ate"], it["de"]),
+            )
+            viagens = [r[0] for r in cur.fetchall()]
+            turnos += len(viagens)
+            _liberar_viagens(cur, viagens)
+            cur.execute(
+                "DELETE FROM silver.leituras_fadiga WHERE device_id = %s AND registrado_em >= %s AND registrado_em < %s",
+                (device, it["de"], it["ate"]),
+            )
+            leituras += cur.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+    return {"turnos": turnos, "leituras_soltas": leituras}
+
+
+def limpar_periodo(conn, de: str, ate: str) -> dict:
+    """
+    Apaga tudo o que aconteceu nos dias [de, ate] (datas de Brasília) nas
+    empresas cadastradas: turnos que começaram nesses dias (com leituras e
+    alertas), leituras e alertas soltos, ações da central, ocorrências
+    internas e viagens. Cadastros (motoristas, veículos, câmeras) ficam. O
+    simulador regenera os dias em seguida.
+    """
+    tz = "America/Sao_Paulo"
+    cur = conn.cursor()
+    apagado = {}
+    try:
+        def executar(nome, sql, extra=()):
+            cur.execute(sql, (de, ate, *extra))
+            apagado[nome] = cur.rowcount
+
+        executar("acoes", f"""
+            DELETE FROM silver.acoes_motorista a USING silver.motoristas m
+             WHERE m.id = a.motorista_id AND m.empresa_id IS NOT NULL
+               AND (a.realizado_em AT TIME ZONE '{tz}')::date BETWEEN %s AND %s""")
+        executar("ocorrencias", f"""
+            DELETE FROM silver.incidentes
+             WHERE origem = 'interno' AND (ocorrido_em AT TIME ZONE '{tz}')::date BETWEEN %s AND %s""")
+        cur.execute(f"""
+            DELETE FROM silver.turnos t
+             WHERE (t.iniciado_em AT TIME ZONE '{tz}')::date BETWEEN %s AND %s
+            RETURNING t.viagem_id""", (de, ate))
+        apagado["turnos"] = cur.rowcount
+        executar("leituras", f"""
+            DELETE FROM silver.leituras_fadiga
+             WHERE (registrado_em AT TIME ZONE '{tz}')::date BETWEEN %s AND %s""")
+        executar("alertas", f"""
+            DELETE FROM silver.alertas
+             WHERE (disparado_em AT TIME ZONE '{tz}')::date BETWEEN %s AND %s""")
+        executar("viagens", f"""
+            DELETE FROM silver.viagens
+             WHERE (partida_prevista AT TIME ZONE '{tz}')::date BETWEEN %s AND %s""")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+    logger.info("Período %s a %s apagado: %s", de, ate, apagado)
+    return apagado
+
+
+def _acao(event):
+    """Pedido direto do simulador (lambda invoke), não evento do S3."""
+    try:
+        conn = get_connection()
+    except Exception:
+        reset_connection()
+        raise
+    acao = event["acao"]
+    if acao == "ultimas_leituras":
         return {"ultimas": ultimas_leituras(conn, list(event.get("devices") or []))}
+    if acao == "cobertura":
+        turnos = list(event.get("turnos") or [])
+        resultado = cobertura(conn, turnos)
+        return {"cobertura": resultado}
+    if acao == "planejar_viagens":
+        return {"viagens": planejar_viagens(conn, list(event.get("turnos") or []))}
+    if acao == "limpar":
+        return {"limpo": limpar(conn, list(event.get("intervalos") or []))}
+    if acao == "limpar_periodo":
+        return {"apagado": limpar_periodo(conn, event["de"], event["ate"])}
+    raise ValueError(f"acao desconhecida: {acao}")
+
+
+def handler(event, context):
+    if isinstance(event, dict) and event.get("acao"):
+        return _acao(event)
 
     registros = _registros(event)
     logger.info("Recebidos %d objetos do S3", len(registros))

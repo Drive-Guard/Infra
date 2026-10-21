@@ -145,35 +145,67 @@ def test_lacuna_vira_um_lote_por_turno_so_dentro_do_intervalo():
         assert len(inicios) == len(lotes)
 
 
-def test_preencher_comeca_na_ultima_leitura_ou_na_meia_noite(monkeypatch):
+def test_preencher_regenera_turnos_que_faltam_ou_pela_metade(monkeypatch):
     simulador = carregar_lambda("simulador")
     agora = datetime(2026, 10, 21, 1, 30, tzinfo=timezone.utc)  # 22h30 de 20/10 em Brasília
     monkeypatch.setattr(simulador, "ETL_SILVER_FUNCTION", "etl")
-    monkeypatch.setattr(simulador, "CAMERAS", 3)
+    monkeypatch.setattr(simulador, "CAMERAS", 4)
     estado = {}
     monkeypatch.setattr(simulador, "_ler_estado", lambda: dict(estado))
     monkeypatch.setattr(simulador, "_gravar_estado", lambda e: (estado.clear(), estado.update(e)))
-    ontem = "2026-10-19T12:00:00+00:00"
-    recente = (agora - timedelta(minutes=5)).isoformat()
-    monkeypatch.setattr(simulador, "_ultimas_leituras", lambda devices: {"dg-edge-0001": ontem, "dg-edge-0002": None, "dg-edge-0003": recente})
+    pedidos = []
+
+    # Banco de mentira: câmera 1 sem nada, 2 pela metade, 3 completa, 4 pela metade mas protegida.
+    def etl(pedido):
+        pedidos.append(pedido)
+        if pedido["acao"] == "cobertura":
+            resposta = []
+            for t in pedido["turnos"]:
+                c = int(t["device"][-4:])
+                resposta.append({1: {"blocos": 0, "protegido": False},
+                                 2: {"blocos": 3, "protegido": False},
+                                 3: {"blocos": 10_000, "protegido": False},
+                                 4: {"blocos": 3, "protegido": True}}[c])
+            return {"cobertura": resposta}
+        return {}
+
+    monkeypatch.setattr(simulador, "_etl", etl)
     enviados = []
     monkeypatch.setattr(simulador, "enviar", lambda lote: enviados.append(lote) or 202)
 
-    r = simulador.preencher_lacunas(agora, forcar=True)
+    r = simulador.preencher_lacunas(agora, forcar=True, dias=3)["preenchimento"]
     por_device = {}
     for lote in enviados:
         por_device.setdefault(lote["device_id"], []).extend(_parse(l["registrado_em"]) for l in lote["leituras"])
-    # Câmera 1 desde a última leitura; câmera 2, sem dado, desde a meia-noite de hoje (Brasília);
-    # câmera 3 com leitura há 5 min: nada a preencher.
-    if "dg-edge-0001" in por_device:
-        assert min(por_device["dg-edge-0001"]) > _parse(ontem)
-    if "dg-edge-0002" in por_device:
-        assert min(por_device["dg-edge-0002"]) >= datetime(2026, 10, 20, 0, 0, tzinfo=FUSO)
-    assert "dg-edge-0003" not in por_device
+    assert set(por_device) == {"dg-edge-0001", "dg-edge-0002"}
     assert all(max(v) < agora for v in por_device.values())
-    assert r["preenchimento"]["lotes"] == len(enviados) and estado.get("fim")
+    # Só a câmera 2 (que tinha parte do turno) é limpa antes; as duas ganham viagem planejada com a rota.
+    limpar = [p for p in pedidos if p["acao"] == "limpar"]
+    assert {i["device"] for p in limpar for i in p["intervalos"]} == {"dg-edge-0002"}
+    planejar = next(p for p in pedidos if p["acao"] == "planejar_viagens")
+    assert {t["device"] for t in planejar["turnos"]} == {"dg-edge-0001", "dg-edge-0002"}
+    assert planejar["turnos"][0]["rota"] in simulador.NOMES_ROTAS
+    assert r["turnos_protegidos"] >= 1 and r["lotes"] == len(enviados) and estado.get("fim")
+    # Cada turno vai inteiro, num lote só, do começo ao fim (ou até agora).
+    for lote in enviados:
+        ts = [_parse(l["registrado_em"]) for l in lote["leituras"]]
+        assert ts == sorted(ts)
 
     # Logo em seguida, a checagem periódica não preenche de novo (o ETL ainda está gravando).
     enviados.clear()
     r2 = simulador.preencher_lacunas(agora + timedelta(minutes=2))
     assert r2["preenchimento"] == "ignorado" and enviados == []
+
+
+def test_frota_ampliada_tem_gente_dirigindo_a_qualquer_hora():
+    simulador = carregar_lambda("simulador")
+    for camera in range(17, 41):
+        semana = [simulador.turno_do_dia(camera, date(2026, 10, 12) + timedelta(days=d)) for d in range(7)]
+        assert sum(t is None for t in semana) == 2
+    saidas = sorted({simulador.perfil(c)["saida_min"] // 60 for c in range(17, 41)})
+    assert saidas == list(range(24))
+    for hora in range(24):
+        agora = datetime(2026, 10, 21, hora, 10, tzinfo=FUSO)
+        assert sum(1 for c in range(1, 41) if simulador.turno_atual(c, agora)) >= 6
+    # Os 16 do seed não mudam.
+    assert simulador.perfil(2)["noturno"] and simulador.perfil(2)["saida_min"] == 21 * 60 + 30 + 2 * 30

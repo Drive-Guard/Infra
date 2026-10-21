@@ -22,13 +22,24 @@ O estado segue as faixas do modelo de 3 classes: alerta (< 40), fadiga
 (40 a 70) e sonolento (>= 70). Sonolento gera alerta, no máximo um a cada 20
 minutos por câmera.
 
-Preenchimento de lacunas: ao ser ligado (scripts/dados_ao_vivo.* manda
-{"preencher": true}) e a cada 15 minutos, pergunta à Lambda do ETL Silver
-(dentro da VPC) a última leitura de cada câmera e manda o que falta até
-agora, com uma leitura a cada 5 minutos: o dia de hoje desde a meia-noite e
-os dias anteriores sem dados, até PREENCHER_MAX_DIAS para trás. A escala e o
-modelo são os mesmos, então o turno preenchido emenda no que segue ao vivo.
-Um estado no S3 evita duas execuções preenchendo a mesma lacuna.
+Frota: as 16 câmeras do seed (um ano de histórico) e as 24 da frota
+ampliada (dg-edge-0017 a 0040, cadastradas no fim do seed), com saídas
+espalhadas pelas 24 horas: a qualquer hora há motoristas começando, no meio
+e terminando o turno.
+
+Preenchimento pela escala: ao ser ligado (scripts/dados_ao_vivo.* manda
+{"preencher": true}), ao fim do subir e a cada 15 minutos, confere cada turno
+da escala (de cada câmera, até PREENCHER_MAX_DIAS para trás; nas checagens
+de 15 em 15 minutos, só os 2 últimos dias) contra o que existe no banco,
+perguntando à Lambda do ETL Silver (dentro da VPC). O turno que falta, ou que
+ficou pela metade (lab desligado no meio dele), é apagado e enviado de novo
+inteiro, com uma leitura a cada 5 minutos, já com a viagem planejada da rota.
+Assim o motorista que aparece ao vivo já tem as horas anteriores do turno. O
+turno em que alguém da central agiu (ação, ocorrência, alerta respondido)
+nunca é apagado. Um estado no S3 evita duas execuções preenchendo juntas.
+
+{"regenerar": {"de": "AAAA-MM-DD", "ate": "AAAA-MM-DD"}} apaga esses dias
+(telemetria, ações, ocorrências e viagens; cadastros ficam) e gera de novo.
 
 Desligado por padrão (variável enable_simulador do Terraform). Usa a
 biblioteca padrão e o boto3 do runtime (S3 e invocação do ETL).
@@ -63,6 +74,11 @@ PREENCHER_MAX_DIAS = int(os.environ.get("PREENCHER_MAX_DIAS", "30"))
 PASSO_PREENCHIMENTO_MIN = int(os.environ.get("PASSO_PREENCHIMENTO_MIN", "5"))
 LACUNA_MINIMA_MIN = 15
 CHECAR_A_CADA_MIN = 15
+# Nas checagens periódicas, só os turnos dos últimos dias (a checagem
+# completa roda quando o simulador é ligado ou pedido).
+DIAS_CHECAGEM_PERIODICA = 2
+# Turno com menos que isto dos blocos de 5 min esperados é regenerado.
+COBERTURA_MINIMA = 0.8
 # Uma execução preenchendo (ou que acabou de preencher, com o ETL ainda
 # gravando) segura as outras por este tempo.
 TRAVA_MIN = 14
@@ -74,6 +90,10 @@ DIA_ZERO = date(2000, 1, 1)
 
 # Mesma ordem das rotas no seed: o motorista i usa a rota 1 + (i % 8).
 DISTANCIA_ROTA_KM = [430, 1620, 1370, 710, 210, 220, 800, 520]
+NOMES_ROTAS = ["Via Dutra", "Rota do Centro-Oeste", "Rio-Bahia", "Rota Sul",
+               "Eixo Goiás-DF", "Interior Paulista", "Litoral Nordeste", "Corredor Capixaba"]
+# Motoristas 1 a 16: os do seed. Daí em diante, a frota ampliada.
+MOTORISTAS_SEED = 16
 TIPOS_VEICULO = ["caminhao", "onibus", "caminhao", "van"]
 NOTURNOS = {2, 6, 10, 14}
 # Deslocamento das folgas (índice = número do motorista), igual ao seed.
@@ -115,6 +135,8 @@ def hash_motorista(codigo: str) -> str:
 # ---------------------------------------------------------------------------
 
 def perfil(i: int) -> dict:
+    if i > MOTORISTAS_SEED:
+        return _perfil_ampliada(i)
     tipo = TIPOS_VEICULO[i % 4]
     noturno = i in NOTURNOS
     if noturno:
@@ -133,8 +155,27 @@ def perfil(i: int) -> dict:
     }
 
 
+def _perfil_ampliada(i: int) -> dict:
+    """
+    Frota ampliada: uma saída a cada hora do dia (00h30, 01h30... 23h30, com
+    um desvio por motorista), para haver gente dirigindo a qualquer hora.
+    Quem sai entre 19h e 4h é da madrugada (turno de até 8 h).
+    """
+    k = i - MOTORISTAS_SEED - 1
+    saida = (k * 60 + 30 + (k * 37) % 25) % 1440
+    base = 0.8 + ((i * 5) % 9) * 0.1
+    return {
+        "tipo": TIPOS_VEICULO[i % 4],
+        "noturno": saida >= 19 * 60 or saida < 4 * 60,
+        "suscetibilidade": base * (EFEITO_TREINAMENTO if base >= LIMIAR_TREINAMENTO - 1e-9 else 1.0),
+        "saida_min": saida,
+        "distancia_km": DISTANCIA_ROTA_KM[i % 8],
+    }
+
+
 def folga(i: int, dnum: int) -> bool:
-    return (dnum + FOLGA_OFFSET[i]) % 7 in (0, 3)
+    deslocamento = FOLGA_OFFSET[i] if i <= MOTORISTAS_SEED else (i * 3) % 7
+    return (dnum + deslocamento) % 7 in (0, 3)
 
 
 def turno_do_dia(i: int, dia: date) -> dict | None:
@@ -388,18 +429,15 @@ def _gravar_estado(estado_atual: dict) -> None:
     )
 
 
-def _ultimas_leituras(devices: list[str]) -> dict:
-    """Pergunta ao ETL Silver (dentro da VPC) a última leitura de cada câmera."""
+def _etl(pedido: dict) -> dict:
+    """Pedido à Lambda do ETL Silver, que fica dentro da VPC e enxerga o banco."""
     import boto3
 
-    r = boto3.client("lambda").invoke(
-        FunctionName=ETL_SILVER_FUNCTION,
-        Payload=json.dumps({"acao": "ultimas_leituras", "devices": devices}).encode("utf-8"),
-    )
+    r = boto3.client("lambda").invoke(FunctionName=ETL_SILVER_FUNCTION, Payload=json.dumps(pedido).encode("utf-8"))
     corpo = json.loads(r["Payload"].read())
     if r.get("FunctionError"):
-        raise RuntimeError(f"ETL nao respondeu as ultimas leituras: {str(corpo)[:300]}")
-    return corpo.get("ultimas", {})
+        raise RuntimeError(f"ETL falhou em {pedido.get('acao')}: {str(corpo)[:300]}")
+    return corpo
 
 
 def meia_noite(ts: datetime) -> datetime:
@@ -408,11 +446,45 @@ def meia_noite(ts: datetime) -> datetime:
     return datetime(local.year, local.month, local.day, tzinfo=FUSO)
 
 
-def preencher_lacunas(agora: datetime, forcar: bool = False) -> dict:
+def turnos_da_escala(camera: int, de: datetime, ate: datetime) -> list[dict]:
+    """Turnos da escala da câmera que se sobrepõem a [de, ate)."""
+    turnos = []
+    dia = (de - timedelta(days=1)).astimezone(FUSO).date()
+    while dia <= ate.astimezone(FUSO).date():
+        t = turno_do_dia(camera, dia)
+        if t and t["inicio"] < ate and t["fim"] > de:
+            turnos.append(t)
+        dia += timedelta(days=1)
+    return turnos
+
+
+def turnos_a_conferir(agora: datetime, dias: int) -> list[dict]:
     """
-    Manda o que falta entre a última leitura de cada câmera e agora. Sem
-    leitura nenhuma, começa na meia-noite de hoje; lacuna mais antiga que
-    PREENCHER_MAX_DIAS começa na meia-noite de lá.
+    Cada turno da escala nos últimos `dias` (até agora), com os lotes que o
+    representam: o que seria enviado se ele faltasse.
+    """
+    ate = agora.replace(second=0, microsecond=0)  # o minuto atual é do ao vivo
+    limite = meia_noite(agora - timedelta(days=dias))
+    candidatos = []
+    for camera in range(1, CAMERAS + 1):
+        for t in turnos_da_escala(camera, limite, ate):
+            de, fim = max(t["inicio"], limite), min(t["fim"], ate)
+            if (fim - de).total_seconds() / 60 < LACUNA_MINIMA_MIN:
+                continue
+            lotes = lotes_da_lacuna(camera, de - timedelta(seconds=1), fim)
+            esperado = sum(len(l["leituras"]) for l in lotes)
+            if esperado >= 3:
+                candidatos.append({
+                    "camera": camera, "de": de, "ate": fim, "lotes": lotes, "esperado": esperado,
+                    "rota": NOMES_ROTAS[camera % 8],
+                })
+    return candidatos
+
+
+def preencher_lacunas(agora: datetime, forcar: bool = False, dias: int | None = None) -> dict:
+    """
+    Confere os turnos da escala contra o banco e regenera os que faltam ou
+    ficaram pela metade (ver o cabeçalho).
     """
     if not ETL_SILVER_FUNCTION:
         return {"preenchimento": "desligado (sem ETL_SILVER_FUNCTION)"}
@@ -424,34 +496,65 @@ def preencher_lacunas(agora: datetime, forcar: bool = False) -> dict:
             return {"preenchimento": "ignorado", "motivo": "outro preenchimento recente", "estado": estado_ant}
     _gravar_estado({"inicio": _iso(agora)})
 
-    devices = [f"dg-edge-{c:04d}" for c in range(1, CAMERAS + 1)]
-    ultimas = _ultimas_leituras(devices)
-    limite = meia_noite(agora - timedelta(days=PREENCHER_MAX_DIAS))
-    ate = agora.replace(second=0, microsecond=0)  # o minuto atual é do ao vivo
-    lotes, leituras, falhas, por_camera = 0, 0, [], {}
-    for camera in range(1, CAMERAS + 1):
-        ultima = ultimas.get(f"dg-edge-{camera:04d}")
-        de = max(_parse(ultima), limite) if ultima else meia_noite(agora)
-        if (ate - de).total_seconds() / 60 < LACUNA_MINIMA_MIN:
+    dias = dias or (PREENCHER_MAX_DIAS if forcar else DIAS_CHECAGEM_PERIODICA)
+    candidatos = turnos_a_conferir(agora, dias)
+    device = lambda c: f"dg-edge-{c['camera']:04d}"  # noqa: E731
+    cobertura = _etl({
+        "acao": "cobertura",
+        "turnos": [{"device": device(c), "inicio": _iso(c["de"]), "fim": _iso(c["ate"])} for c in candidatos],
+    })["cobertura"]
+
+    regenerar, limpar, protegidos = [], [], 0
+    for c, cob in zip(candidatos, cobertura):
+        if cob["blocos"] >= COBERTURA_MINIMA * c["esperado"]:
             continue
-        enviados_camera = 0
-        for lote in lotes_da_lacuna(camera, de, ate):
+        if cob["blocos"] and cob["protegido"]:
+            protegidos += 1
+            continue
+        if cob["blocos"]:
+            limpar.append({"device": device(c), "de": _iso(c["de"]), "ate": _iso(c["ate"])})
+        regenerar.append(c)
+
+    if regenerar:
+        _etl({"acao": "planejar_viagens", "turnos": [
+            {"device": device(c), "inicio": _iso(c["de"]), "fim": _iso(c["ate"]), "rota": c["rota"]} for c in regenerar
+        ]})
+    for i in range(0, len(limpar), 200):
+        _etl({"acao": "limpar", "intervalos": limpar[i:i + 200]})
+
+    lotes = leituras = 0
+    falhas = []
+    for c in sorted(regenerar, key=lambda x: (x["camera"], x["de"])):
+        for lote in c["lotes"]:
             for tentativa in range(2):
                 try:
                     enviar(lote)
                     lotes += 1
                     leituras += len(lote["leituras"])
-                    enviados_camera += len(lote["leituras"])
                     break
                 except Exception as exc:
                     if tentativa == 1:
-                        falhas.append({"camera": camera, "erro": str(exc)[:200]})
-        por_camera[camera] = {"de": _iso(de), "leituras": enviados_camera}
+                        falhas.append({"camera": c["camera"], "erro": str(exc)[:200]})
 
-    resumo = {"inicio": _iso(agora), "fim": _iso(datetime.now(timezone.utc)), "lotes": lotes, "leituras": leituras, "falhas": falhas[:10]}
+    resumo = {
+        "inicio": _iso(agora), "fim": _iso(datetime.now(timezone.utc)), "dias": dias,
+        "turnos_conferidos": len(candidatos), "turnos_regenerados": len(regenerar), "turnos_refeitos": len(limpar),
+        "turnos_protegidos": protegidos, "lotes": lotes, "leituras": leituras, "falhas": falhas[:10],
+    }
     _gravar_estado(resumo)
-    logger.info("Preenchimento: %d lotes, %d leituras, %d câmeras, falhas: %s", lotes, leituras, len(por_camera), falhas[:5])
-    return {"preenchimento": resumo, "cameras": por_camera}
+    logger.info("Preenchimento: %s", resumo)
+    return {"preenchimento": resumo}
+
+
+def regenerar_periodo(agora: datetime, de: str, ate: str) -> dict:
+    """Apaga os dias [de, ate] (datas de Brasília) e gera de novo pela escala."""
+    date.fromisoformat(de), date.fromisoformat(ate)  # valida antes de apagar
+    if de > ate or date.fromisoformat(de) > agora.astimezone(FUSO).date():
+        raise ValueError("intervalo inválido para regenerar")
+    apagado = _etl({"acao": "limpar_periodo", "de": de, "ate": ate})["apagado"]
+    dias = (agora.astimezone(FUSO).date() - date.fromisoformat(de)).days + 1
+    _gravar_estado({})  # libera a trava: o preenchimento abaixo precisa rodar
+    return {"apagado": apagado, **preencher_lacunas(agora, forcar=True, dias=max(dias, DIAS_CHECAGEM_PERIODICA))}
 
 
 def handler(event, context):
@@ -477,7 +580,12 @@ def handler(event, context):
     logger.info("Lotes enviados: %d, fora do turno: %d, falhas: %s", enviados, fora_do_turno, falhas)
     resultado = {"enviados": enviados, "fora_do_turno": fora_do_turno, "falhas": falhas}
 
-    # Depois do ao vivo (que não pode atrasar): lacunas, quando pedido ou a cada 15 min.
+    # Depois do ao vivo (que não pode atrasar): regenerar dias, lacunas
+    # quando pedido, ou a checagem de 15 em 15 minutos.
+    if isinstance(event, dict) and event.get("regenerar"):
+        r = event["regenerar"]
+        resultado["regenerar"] = regenerar_periodo(agora, str(r["de"]), str(r.get("ate") or r["de"]))
+        return resultado
     pedido = isinstance(event, dict) and bool(event.get("preencher"))
     if pedido or int(agora.timestamp() // 60) % CHECAR_A_CADA_MIN == 3:
         try:

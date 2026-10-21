@@ -11,9 +11,13 @@
 
     Este script liga ou desliga a regra do EventBridge; o terraform apply
     seguinte não desfaz a escolha. Ao ligar, também pede ao simulador que
-    preencha as lacunas: do último dado de cada câmera (ou da meia-noite de
-    hoje, se não houver nenhum) até agora, até 30 dias para trás. Assim a
-    dashboard já abre com o dia completo, e dali para frente segue ao vivo.
+    confira os turnos da escala dos últimos 30 dias e gere os que faltam ou
+    ficaram pela metade (lab desligado): a dashboard já abre com o dia
+    completo e os motoristas ao vivo com as horas anteriores do turno.
+
+    -Regenerar AAAA-MM-DD (e -Ate AAAA-MM-DD) apaga esses dias (leituras,
+    alertas, turnos, ações da central, ocorrências e viagens; cadastros
+    ficam) e gera de novo pela escala.
 
     Desligado: o dashboard mostra o histórico, mas nada "dirigindo agora".
     Para a apresentação sem dados chegando, rode antes o injetar_dados (os
@@ -23,12 +27,16 @@
     ./scripts/dados_ao_vivo.ps1            # estado atual
     ./scripts/dados_ao_vivo.ps1 -Ligar
     ./scripts/dados_ao_vivo.ps1 -Desligar
+    ./scripts/dados_ao_vivo.ps1 -Regenerar 2026-10-20
+    ./scripts/dados_ao_vivo.ps1 -Regenerar 2026-10-18 -Ate 2026-10-20
 #>
 
 [CmdletBinding(DefaultParameterSetName = "Status")]
 param(
     [Parameter(ParameterSetName = "Ligar")][switch]$Ligar,
     [Parameter(ParameterSetName = "Desligar")][switch]$Desligar,
+    [Parameter(ParameterSetName = "Regenerar")][ValidatePattern('^\d{4}-\d{2}-\d{2}$')][string]$Regenerar,
+    [Parameter(ParameterSetName = "Regenerar")][ValidatePattern('^\d{4}-\d{2}-\d{2}$')][string]$Ate,
     [string]$Regiao = "us-east-1",
     [string]$Prefixo = "driveguard-dev"
 )
@@ -57,6 +65,18 @@ if ($Ligar) {
     $ErrorActionPreference = $anterior
     if ($LASTEXITCODE) { Write-Host "Aviso: não consegui pedir o preenchimento agora; ele roda sozinho em até 15 min." -ForegroundColor Yellow }
     else { Write-Host "Preenchendo as lacunas até agora (alguns minutos; a dashboard atualiza sozinha)." -ForegroundColor Cyan }
+} elseif ($Regenerar) {
+    $fim = if ($Ate) { $Ate } else { $Regenerar }
+    Write-Host "Apagando $Regenerar a $fim e gerando de novo (pode levar alguns minutos)..." -ForegroundColor Cyan
+    $evento = Join-Path $env:TEMP "driveguard-regenerar.json"
+    [IO.File]::WriteAllText($evento, "{""regenerar"": {""de"": ""$Regenerar"", ""ate"": ""$fim""}}")
+    $saida = Join-Path $env:TEMP "driveguard-regenerar-saida.json"
+    aws lambda invoke --region $Regiao --function-name $regra --cli-read-timeout 900 --payload "fileb://$evento" $saida | Out-Null
+    if ($LASTEXITCODE) { throw "Falha ao chamar o simulador" }
+    $r = Get-Content $saida -Raw | ConvertFrom-Json
+    if ($r.errorMessage) { throw "O simulador falhou: $($r.errorMessage)" }
+    $p = $r.regenerar.preenchimento
+    Write-Host ("Apagado: {0} turnos. Gerado: {1} turnos ({2} leituras)." -f $r.regenerar.apagado.turnos, $p.turnos_regenerados, $p.leituras) -ForegroundColor Green
 } elseif ($Desligar) {
     aws events disable-rule --region $Regiao --name $regra | Out-Null
     if ($LASTEXITCODE) { throw "Falha ao desligar $regra" }

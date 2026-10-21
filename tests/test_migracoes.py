@@ -27,13 +27,16 @@ def _valor(conn, sql, params=()):
 
 
 def test_seed_cria_a_frota_de_demonstracao(banco_demo):
-    assert _valor(banco_demo, "SELECT count(*) FROM silver.motoristas") == 16
-    assert _valor(banco_demo, "SELECT count(*) FROM silver.veiculos") == 16
-    assert _valor(banco_demo, "SELECT count(*) FROM silver.dispositivos") == 17
+    # 16 com um ano de histórico + 24 da frota ampliada (histórico vem do simulador).
+    assert _valor(banco_demo, "SELECT count(*) FROM silver.motoristas") == 40
+    assert _valor(banco_demo, "SELECT count(*) FROM silver.veiculos") == 40
+    assert _valor(banco_demo, "SELECT count(*) FROM silver.dispositivos") == 41
+    assert _valor(banco_demo, "SELECT count(*) FROM silver.dispositivos WHERE device_id = 'dg-edge-0040' AND status = 'ativo'") == 1
+    assert _valor(banco_demo, "SELECT frota_total FROM silver.empresas") == 50
     assert _valor(banco_demo, "SELECT count(*) FROM silver.rotas") == 8
     assert _valor(banco_demo, "SELECT count(*) FROM silver.alertas") > 0
-    # Um vínculo encerrado (câmera trocada) e 16 abertos.
-    assert _valor(banco_demo, "SELECT count(*) FROM silver.vinculos_dispositivo_veiculo WHERE fim IS NULL") == 16
+    # Um vínculo encerrado (câmera trocada) e 40 abertos.
+    assert _valor(banco_demo, "SELECT count(*) FROM silver.vinculos_dispositivo_veiculo WHERE fim IS NULL") == 40
     # BRs no formato da PRF (sem zero à esquerda).
     assert _valor(banco_demo, "SELECT count(*) FROM silver.rotas WHERE EXISTS (SELECT 1 FROM unnest(brs) b WHERE b LIKE '0%')") == 0
 
@@ -63,7 +66,7 @@ def test_refresh_concurrently_de_todas_as_views(banco_demo):
 def test_views_da_dashboard_tem_dados(banco_demo):
     assert _valor(banco_demo, "SELECT count(*) FROM gold.vw_frota_agora") == 16
     assert _valor(banco_demo, "SELECT count(*) FROM gold.mv_kpis_diarios") > 0
-    assert _valor(banco_demo, "SELECT count(*) FROM gold.mv_ranking_motoristas") == 16
+    assert _valor(banco_demo, "SELECT count(*) FROM gold.mv_ranking_motoristas") == 40
     assert _valor(banco_demo, "SELECT count(*) FROM gold.mv_rotas_desempenho") > 0
     assert _valor(banco_demo, "SELECT count(*) FROM gold.mv_fadiga_por_tempo_direcao") > 0
 
@@ -72,7 +75,7 @@ def test_reaplicar_as_migracoes_nao_muda_os_dados(banco_demo):
     antes = _valor(banco_demo, "SELECT count(*) FROM silver.leituras_fadiga")
     aplicar(banco_demo, TODOS)
     assert _valor(banco_demo, "SELECT count(*) FROM silver.leituras_fadiga") == antes
-    assert _valor(banco_demo, "SELECT count(*) FROM silver.motoristas") == 16
+    assert _valor(banco_demo, "SELECT count(*) FROM silver.motoristas") == 40
 
 
 def test_hash_antigo_do_motorista_vira_o_normalizado(banco_demo):

@@ -521,7 +521,7 @@ variable "seed_dias_historico" {
 }
 
 variable "simulador_cameras" {
-  description = "Quantas câmeras do seed o simulador faz enviar (16 = a frota inteira)."
+  description = "Quantas câmeras do seed o simulador faz enviar (40 = a frota inteira: 16 com um ano de histórico + 24 da frota ampliada)."
   type        = number
-  default     = 16
+  default     = 40
 }

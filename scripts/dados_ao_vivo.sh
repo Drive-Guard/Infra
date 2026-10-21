@@ -4,6 +4,7 @@
 # Equivalente POSIX de scripts/dados_ao_vivo.ps1 — ver o cabeçalho de lá.
 #
 # Uso: ./scripts/dados_ao_vivo.sh [ligar|desligar|status]
+#      ./scripts/dados_ao_vivo.sh regenerar AAAA-MM-DD [AAAA-MM-DD]
 
 set -euo pipefail
 
@@ -24,8 +25,19 @@ case "$ACAO" in
     fi
     ;;
   desligar) aws events disable-rule --region "$REGIAO" --name "$REGRA" ;;
+  regenerar)
+    DE="${2:?informe a data (AAAA-MM-DD)}"
+    ATE="${3:-$DE}"
+    echo "Apagando $DE a $ATE e gerando de novo (pode levar alguns minutos)..."
+    SAIDA="$(mktemp)"
+    aws lambda invoke --region "$REGIAO" --function-name "$REGRA" --cli-read-timeout 900 \
+      --cli-binary-format raw-in-base64-out --payload "{\"regenerar\": {\"de\": \"$DE\", \"ate\": \"$ATE\"}}" "$SAIDA" >/dev/null
+    if grep -q errorMessage "$SAIDA"; then cat "$SAIDA" >&2; exit 1; fi
+    echo "Pronto: $(cat "$SAIDA")"
+    rm -f "$SAIDA"
+    ;;
   status) ;;
-  *) echo "Uso: $0 [ligar|desligar|status]" >&2; exit 2 ;;
+  *) echo "Uso: $0 [ligar|desligar|status] | regenerar AAAA-MM-DD [AAAA-MM-DD]" >&2; exit 2 ;;
 esac
 
 ESTADO="$(aws events describe-rule --region "$REGIAO" --name "$REGRA" --query State --output text)"

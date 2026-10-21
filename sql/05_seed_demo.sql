@@ -773,3 +773,80 @@ BEGIN
         v_n_incid, v_n_quase, ROUND(v_soma_piloto / GREATEST(1, v_dias - CEIL(v_dias * 0.75)) * 365, 1);
 END
 $seed$;
+
+-- =============================================================================
+-- Frota ampliada (motoristas 17 a 40)
+--
+-- 24 motoristas, veículos e câmeras que entraram na frota há 5 semanas, com
+-- saídas espalhadas pelas 24 horas: a qualquer hora há gente começando,
+-- no meio e terminando o turno, e a dashboard tem motoristas ao vivo também
+-- de madrugada. Não entram na simulação de um ano acima: o histórico deles
+-- (os últimos 30 dias) e o ao vivo vêm da Lambda simulador, que usa a mesma
+-- escala (ver perfil() em lambdas/simulador/handler.py).
+--
+-- Fora do IF do seed: roda em toda migração e só cria o que falta, então
+-- chega também ao banco que já tinha os 16 primeiros.
+-- =============================================================================
+
+DO $frota$
+DECLARE
+    c_empresa CONSTANT UUID := '00000000-0000-4000-8000-000000000001';
+    v_nomes   TEXT[] := ARRAY['Rafael Moreira','Diego Barbosa','Leandro Teixeira','Márcio Freitas',
+                              'Thiago Ribeiro','Vinícius Araújo','Rodrigo Pinto','Alexandre Monteiro',
+                              'Daniel Correia','Fábio Carvalho','Júlio Batista','Renato Farias',
+                              'Wagner Lopes','Cláudio Rezende','Edson Prado','Gilberto Vasconcelos',
+                              'Hélio Brandão','Jefferson Cunha','Leonardo Sales','Maurício Duarte',
+                              'Nelson Peixoto','Otávio Siqueira','Sandro Medeiros','Wellington Faria'];
+    v_ufs     TEXT[] := ARRAY['SP','RJ','MG','PR','RS','BA','PE','GO'];
+    v_tipos   silver.tipo_veiculo[] := ARRAY['caminhao','onibus','caminhao','van']::silver.tipo_veiculo[];
+    v_prefixo TEXT[] := ARRAY['TRK','BUS','TRK','VAN'];
+    v_modelos TEXT[] := ARRAY['Volvo FH 540','Marcopolo Paradiso G8','Scania R450','Iveco Daily'];
+    v_veiculo UUID;
+    v_disp    UUID;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM silver.empresas WHERE id = c_empresa) THEN
+        RETURN;
+    END IF;
+
+    FOR i IN 17..40 LOOP
+        CONTINUE WHEN EXISTS (SELECT 1 FROM silver.dispositivos WHERE device_id = 'dg-edge-' || lpad(i::TEXT, 4, '0'));
+
+        INSERT INTO silver.veiculos (empresa_id, placa_hash, placa, tipo, modelo, ano_fabricacao, capacidade_passageiros)
+        VALUES (c_empresa,
+                encode(sha256(convert_to('DGD' || lpad(i::TEXT, 4, '0'), 'UTF8')), 'hex'),
+                'DGD' || chr(64 + ((i - 1) % 26) + 1) || lpad((10 + i)::TEXT, 2, '0'),
+                v_tipos[1 + (i % 4)], v_modelos[1 + (i % 4)], 2018 + (i % 7),
+                CASE WHEN v_tipos[1 + (i % 4)] = 'onibus' THEN 44 ELSE NULL END)
+        RETURNING id INTO v_veiculo;
+
+        INSERT INTO silver.dispositivos (empresa_id, device_id, codigo, descricao, status)
+        VALUES (c_empresa, 'dg-edge-' || lpad(i::TEXT, 4, '0'), v_prefixo[1 + (i % 4)] || '-' || (1040 + i)::TEXT,
+                'Câmera IR embarcada', 'ativo')
+        RETURNING id INTO v_disp;
+
+        INSERT INTO silver.vinculos_dispositivo_veiculo (dispositivo_id, veiculo_id, inicio, motivo)
+        VALUES (v_disp, v_veiculo, now() - INTERVAL '35 days', 'Instalação inicial (ampliação da frota)');
+
+        INSERT INTO silver.motoristas (empresa_id, codigo, motorista_hash, nome_exibicao, idade, anos_experiencia,
+                                       categoria_cnh, cnh_valida_ate, regiao_uf, status, baseline_ear)
+        VALUES (c_empresa, 'DRV-' || (999 + i)::TEXT,
+                encode(sha256(convert_to(lower('DRV-' || (999 + i)::TEXT), 'UTF8')), 'hex'),
+                v_nomes[i - 16], 26 + (i * 3) % 34, 1 + (i * 7) % 28,
+                CASE WHEN v_tipos[1 + (i % 4)] = 'onibus' THEN 'D' ELSE 'E' END,
+                CURRENT_DATE + ((6 + i % 30) || ' months')::INTERVAL,
+                v_ufs[1 + ((i * 3) % 8)], 'ativo', 0.2900 + (i % 5) * 0.0100)
+        ON CONFLICT DO NOTHING;
+    END LOOP;
+
+    -- Tamanho da frota (cobertura do ROI = veículos com câmera / frota) e, na
+    -- primeira vez, a taxa anual de acidentes do seed (calculada com 16
+    -- motoristas) proporcional aos 40.
+    IF (SELECT frota_total FROM silver.empresas WHERE id = c_empresa) < 50 THEN
+        UPDATE silver.parametros_roi
+           SET valor = ROUND(valor * 40 / 16.0, 1),
+               fonte = fonte || ' (proporcional à frota ampliada: 40 motoristas)'
+         WHERE empresa_id = c_empresa AND chave = 'acidentes_ano_frota';
+        UPDATE silver.empresas SET frota_total = 50 WHERE id = c_empresa;
+    END IF;
+END
+$frota$;

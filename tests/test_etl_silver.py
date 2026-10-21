@@ -325,3 +325,59 @@ def test_aceita_evento_do_eventbridge(conn, enviar):
     r = enviar(lote("dg-edge-0900", "DRV-9000", BASE), formato="eventbridge")
     assert r["processados"] == 1
     assert um(conn, "SELECT count(*) FROM silver.leituras_fadiga")[0] == 10
+
+
+def test_lote_fora_de_ordem_vira_um_turno_so(conn, enviar):
+    # O ao vivo (10:00) chega antes do preenchimento das horas anteriores.
+    enviar(lote("dg-edge-0900", "DRV-9000", BASE + timedelta(hours=2)))
+    enviar(lote("dg-edge-0900", "DRV-9000", BASE, n=24, passo_s=300))  # 08:00-09:55, de 5 em 5 min
+    turnos = todos(conn, "SELECT iniciado_em, status::text FROM silver.turnos")
+    assert turnos == [(BASE, "em_andamento")]
+    assert um(conn, "SELECT count(*) FROM silver.leituras_fadiga")[0] == 34
+
+
+def test_cobertura_limpar_e_viagem_planejada(conn, enviar, etl):
+    frota = cadastrar_frota(conn, device_id="dg-edge-0500", partida=BASE)
+    enviar(lote("dg-edge-0500", "DRV-1000", BASE, n=12, passo_s=300))  # 1 h de leituras
+    pedido = [
+        {"device": "dg-edge-0500", "inicio": iso(BASE), "fim": iso(BASE + timedelta(hours=2)), "rota": "Via Dutra"},
+        {"device": "dg-edge-0500", "inicio": iso(BASE + timedelta(days=1)), "fim": iso(BASE + timedelta(days=1, hours=2)), "rota": "Via Dutra"},
+    ]
+    cob = etl.handler({"acao": "cobertura", "turnos": pedido}, None)["cobertura"]
+    assert cob == [{"blocos": 12, "protegido": False}, {"blocos": 0, "protegido": False}]
+
+    # Alguém da central agiu no turno: ele passa a ser protegido.
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO silver.usuarios (empresa_id, email_hash, nome, papel) VALUES (%s, 'hash-central', 'Central', 'operador')
+           RETURNING id""", (frota["empresa"],))
+    usuario = cur.fetchone()[0]
+    cur.execute(
+        """INSERT INTO silver.acoes_motorista (motorista_id, turno_id, tipo, realizado_por)
+           SELECT motorista_id, id, 'contato_telefonico', %s FROM silver.turnos""", (usuario,))
+    conn.commit()
+    assert etl.handler({"acao": "cobertura", "turnos": pedido[:1]}, None)["cobertura"][0]["protegido"] is True
+    cur.execute("DELETE FROM silver.acoes_motorista")
+    conn.commit()
+    cur.close()
+
+    # Limpar apaga o turno (leituras em cascata) e devolve a viagem para planejada.
+    r = etl.handler({"acao": "limpar", "intervalos": [{"device": "dg-edge-0500", "de": pedido[0]["inicio"], "ate": pedido[0]["fim"]}]}, None)
+    assert r["limpo"]["turnos"] == 1
+    assert um(conn, "SELECT count(*) FROM silver.leituras_fadiga")[0] == 0
+    assert um(conn, "SELECT status::text, partida_real FROM silver.viagens WHERE id = %s", (frota["viagem"],)) == ("planejada", None)
+
+    # Viagem planejada só onde não há uma (o primeiro horário já tem).
+    assert etl.handler({"acao": "planejar_viagens", "turnos": pedido}, None)["viagens"] == 1
+    assert um(conn, "SELECT count(*) FROM silver.viagens")[0] == 2
+
+
+def test_limpar_periodo_apaga_os_dias_e_mantem_cadastros(conn, enviar, etl):
+    cadastrar_frota(conn, device_id="dg-edge-0500", partida=BASE)
+    enviar(lote("dg-edge-0500", "DRV-1000", BASE))                       # 10/10
+    enviar(lote("dg-edge-0500", "DRV-1000", BASE + timedelta(days=1)))   # 11/10
+    r = etl.handler({"acao": "limpar_periodo", "de": "2026-10-10", "ate": "2026-10-10"}, None)
+    assert r["apagado"]["turnos"] == 1 and r["apagado"]["viagens"] == 1
+    assert um(conn, "SELECT count(*), min(registrado_em) FROM silver.leituras_fadiga") == (10, BASE + timedelta(days=1))
+    assert um(conn, "SELECT count(*) FROM silver.motoristas")[0] == 1
+    assert um(conn, "SELECT count(*) FROM silver.dispositivos")[0] == 1

@@ -680,6 +680,12 @@ delas com histórico de troca), 8 rotas com as BRs e **meses de operação simul
 (`seed_dias_historico`, padrão 365 dias). Não são números soltos: o seed simula a
 frota dia a dia e cada tabela é consequência da anterior.
 
+Além deles, a **frota ampliada**: mais 24 motoristas (`DRV-1016` a `DRV-1039`), com
+veículo e câmera (`dg-edge-0017` a `0040`), que entraram há 5 semanas e saem em horários
+espalhados pelas 24 horas. Com eles, há de 8 a 12 motoristas dirigindo a qualquer hora,
+também de madrugada, cada um num ponto diferente do turno. O histórico deles (30 dias) e
+o ao vivo vêm do simulador, com a mesma escala e o mesmo modelo de fadiga.
+
 - **Perfis**: suscetibilidade à fadiga por motorista, saída de madrugada (4
   caminhoneiros de rota longa), à tarde (ônibus) ou de manhã, escala 5x2.
 - **Fadiga** = horas sem pausa × suscetibilidade + horas de turno + ritmo circadiano
@@ -725,16 +731,27 @@ em diante é o caminho de produção). Para ligar ou desligar sem Terraform:
 ./scripts/dados_ao_vivo.ps1             # (ou .sh status) estado atual
 ./scripts/dados_ao_vivo.ps1 -Desligar   # (ou .sh desligar) só o histórico
 ./scripts/dados_ao_vivo.ps1 -Ligar      # (ou .sh ligar)
+./scripts/dados_ao_vivo.ps1 -Regenerar 2026-10-20   # (ou .sh regenerar 2026-10-20)
 ```
 
-**Lacunas (lab desligado, simulador pausado):** ao ligar (`-Ligar`), ao fim do
-`subir` e sozinho a cada 15 minutos, o simulador preenche o que faltou: de cada câmera,
-do último dado no banco (ou da meia-noite de hoje, se não houver nenhum) até agora,
-olhando no máximo `preencher_max_dias` (padrão 30) para trás. Ligou às 22h sem dados
-hoje: a dashboard já abre com o dia desde 0h, e dali para frente segue ao vivo. O
-preenchimento usa uma leitura a cada 5 minutos (o ao vivo é de 1 em 1), roda
-assíncrono (alguns minutos) e guarda o resumo da última execução em
-`s3://<bucket de artefatos>/simulador/preenchimento.json`.
+**Lacunas (lab desligado, simulador pausado):** ao ligar (`-Ligar`) e ao fim do
+`subir`, o simulador confere cada turno da escala dos últimos `preencher_max_dias`
+(padrão 30) contra o banco; sozinho, a cada 15 minutos, confere os 2 últimos dias. O
+turno que falta, ou que ficou pela metade (o lab desligou no meio dele), é apagado e
+enviado de novo inteiro, já com a viagem planejada da rota. Ligou às 22h depois de um
+dia desligado: a dashboard abre com o dia completo, e quem aparece ao vivo já tem as
+horas anteriores do turno. O preenchimento usa uma leitura a cada 5 minutos (o ao vivo
+é de 1 em 1), roda assíncrono (alguns minutos) e guarda o resumo da última execução em
+`s3://<bucket de artefatos>/simulador/preenchimento.json`. Turno em que alguém da
+central agiu (respondeu alerta, registrou ação ou ocorrência) nunca é apagado.
+
+**Refazer dias:** `-Regenerar AAAA-MM-DD` (com `-Ate` para um intervalo) apaga a
+telemetria desses dias (leituras, alertas, turnos, ações da central, ocorrências e
+viagens; cadastros ficam) e gera de novo pela escala. Útil depois de testes à mão.
+
+O ETL junta os pedaços de uma mesma jornada (mesmo motorista e veículo, menos de 45 min
+entre um e outro) quando os lotes chegam fora de ordem, então o turno não se parte em
+dois quando o preenchimento e o ao vivo chegam juntos.
 
 O estado inicial vem de `dados_ao_vivo` (padrão `true`); o `apply` seguinte não desfaz
 a escolha feita pelo script. Desligado, o dashboard mostra o histórico e nada
