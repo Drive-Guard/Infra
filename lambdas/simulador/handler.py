@@ -83,6 +83,8 @@ LACUNA_MAXIMA_MIN = 50
 # A central da simulação responde os alertas dos turnos encerrados há mais
 # que isto; os mais recentes ficam para quem usa a dashboard.
 CENTRAL_DEPOIS_H = 6
+# Turnos por pedido de cobertura ao ETL (cada pedido fica em poucos segundos).
+TURNOS_POR_PEDIDO = 150
 # Uma execução preenchendo (ou que acabou de preencher, com o ETL ainda
 # gravando) segura as outras por este tempo.
 TRAVA_MIN = 14
@@ -436,8 +438,12 @@ def _gravar_estado(estado_atual: dict) -> None:
 def _etl(pedido: dict) -> dict:
     """Pedido à Lambda do ETL Silver, que fica dentro da VPC e enxerga o banco."""
     import boto3
+    from botocore.config import Config
 
-    r = boto3.client("lambda").invoke(FunctionName=ETL_SILVER_FUNCTION, Payload=json.dumps(pedido).encode("utf-8"))
+    # Sem nova tentativa automática: um pedido que demorou não é repetido em
+    # paralelo. Espera até o tempo máximo do ETL.
+    cliente = boto3.client("lambda", config=Config(read_timeout=150, retries={"max_attempts": 1}))
+    r = cliente.invoke(FunctionName=ETL_SILVER_FUNCTION, Payload=json.dumps(pedido).encode("utf-8"))
     corpo = json.loads(r["Payload"].read())
     if r.get("FunctionError"):
         raise RuntimeError(f"ETL falhou em {pedido.get('acao')}: {str(corpo)[:300]}")
@@ -506,10 +512,12 @@ def preencher_lacunas(agora: datetime, forcar: bool = False, dias: int | None = 
     central = _etl({"acao": "simular_central", "ate": _iso(agora - timedelta(hours=CENTRAL_DEPOIS_H))})["central"]
     candidatos = turnos_a_conferir(agora, dias)
     device = lambda c: f"dg-edge-{c['camera']:04d}"  # noqa: E731
-    cobertura = _etl({
-        "acao": "cobertura",
-        "turnos": [{"device": device(c), "inicio": _iso(c["de"]), "fim": _iso(c["ate"])} for c in candidatos],
-    })["cobertura"]
+    cobertura = []
+    for i in range(0, len(candidatos), TURNOS_POR_PEDIDO):
+        cobertura += _etl({
+            "acao": "cobertura",
+            "turnos": [{"device": device(c), "inicio": _iso(c["de"]), "fim": _iso(c["ate"])} for c in candidatos[i:i + TURNOS_POR_PEDIDO]],
+        })["cobertura"]
 
     regenerar, limpar, protegidos = [], [], 0
     for c, cob in zip(candidatos, cobertura):

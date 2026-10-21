@@ -396,6 +396,10 @@ CREATE INDEX IF NOT EXISTS ix_incidentes_br_uf ON silver.incidentes (br, uf) WHE
 
 ALTER TABLE silver.acoes_motorista ADD COLUMN IF NOT EXISTS detalhe TEXT;
 CREATE INDEX IF NOT EXISTS ix_acoes_alerta ON silver.acoes_motorista (alerta_id) WHERE alerta_id IS NOT NULL;
+-- Consultas do simulador (cobertura da escala) e da fusão de turnos no ETL.
+CREATE INDEX IF NOT EXISTS ix_turnos_device ON silver.turnos (device_id, iniciado_em);
+CREATE INDEX IF NOT EXISTS ix_acoes_turno ON silver.acoes_motorista (turno_id) WHERE turno_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_incidentes_turno ON silver.incidentes (turno_id) WHERE turno_id IS NOT NULL;
 ALTER TABLE silver.alertas ADD COLUMN IF NOT EXISTS motivo_descarte TEXT;
 ALTER TABLE silver.alertas ADD COLUMN IF NOT EXISTS observacao_descarte TEXT;
 
