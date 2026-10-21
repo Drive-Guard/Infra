@@ -759,6 +759,15 @@ horas anteriores do turno. O preenchimento usa uma leitura a cada 5 minutos (o a
 `s3://<bucket de artefatos>/simulador/preenchimento.json`. Turno em que alguém da
 central agiu (respondeu alerta, registrou ação ou ocorrência) nunca é apagado.
 
+**Cenário da apresentação:** `./scripts/dados_ao_vivo.ps1 -Cenario` (ou `.sh cenario`)
+liga por 2 h (`-Minutos` muda) um roteiro sobre o simulador: os 3 motoristas que dirigem há
+mais tempo vão aos poucos para crítico (~12 min), alto (~25 min) e fadiga, com o alerta
+saindo quando o score cruza 70 e a cada 10 min depois. A resposta da central na
+dashboard muda o motorista simulado: "Mandar parar e descansar" faz o score cair durante
+a parada; "Consegui falar com ele" baixa o score por 15 min; "Parar de dirigir hoje" ou
+"Outro motorista assume" encerram o envio. Ao ligar, a câmera da demonstração ao vivo
+(`dg-demo-caetano`) ganha a viagem do dia (Via Dutra). `-CenarioDesligar` volta ao normal.
+
 **Refazer dias:** `-Regenerar AAAA-MM-DD` (com `-Ate` para um intervalo) apaga a
 telemetria desses dias (leituras, alertas, turnos, ações da central, ocorrências e
 viagens; cadastros ficam) e gera de novo pela escala. Útil depois de testes à mão.

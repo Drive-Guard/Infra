@@ -5,6 +5,7 @@
 #
 # Uso: ./scripts/dados_ao_vivo.sh [ligar|desligar|status]
 #      ./scripts/dados_ao_vivo.sh regenerar AAAA-MM-DD [AAAA-MM-DD]
+#      ./scripts/dados_ao_vivo.sh cenario [minutos] | cenario-desligar
 
 set -euo pipefail
 
@@ -25,6 +26,15 @@ case "$ACAO" in
     fi
     ;;
   desligar) aws events disable-rule --region "$REGIAO" --name "$REGRA" ;;
+  cenario|cenario-desligar)
+    ACAO_CENARIO=ligar; [ "$ACAO" = "cenario-desligar" ] && ACAO_CENARIO=desligar
+    SAIDA="$(mktemp)"
+    aws lambda invoke --region "$REGIAO" --function-name "$REGRA" --cli-read-timeout 300 \
+      --cli-binary-format raw-in-base64-out --payload "{\"cenario\": {\"acao\": \"$ACAO_CENARIO\", \"minutos\": ${2:-120}}}" "$SAIDA" >/dev/null
+    if grep -q errorMessage "$SAIDA"; then cat "$SAIDA" >&2; exit 1; fi
+    echo "Cenário da apresentação: $ACAO_CENARIO. $(cat "$SAIDA")"
+    rm -f "$SAIDA"
+    ;;
   regenerar)
     DE="${2:?informe a data (AAAA-MM-DD)}"
     ATE="${3:-$DE}"
@@ -37,7 +47,7 @@ case "$ACAO" in
     rm -f "$SAIDA"
     ;;
   status) ;;
-  *) echo "Uso: $0 [ligar|desligar|status] | regenerar AAAA-MM-DD [AAAA-MM-DD]" >&2; exit 2 ;;
+  *) echo "Uso: $0 [ligar|desligar|status] | regenerar AAAA-MM-DD [AAAA-MM-DD] | cenario [minutos] | cenario-desligar" >&2; exit 2 ;;
 esac
 
 ESTADO="$(aws events describe-rule --region "$REGIAO" --name "$REGRA" --query State --output text)"

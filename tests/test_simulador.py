@@ -215,3 +215,75 @@ def test_frota_ampliada_tem_gente_dirigindo_a_qualquer_hora():
         assert sum(1 for c in range(1, 41) if simulador.turno_atual(c, agora)) >= 6
     # Os 16 do seed não mudam.
     assert simulador.perfil(2)["noturno"] and simulador.perfil(2)["saida_min"] == 21 * 60 + 30 + 2 * 30
+
+
+def _cenario(monkeypatch, simulador, agora, acoes=None):
+    """Liga o cenário com o S3 e o ETL de mentira; `acoes` = {device: [ação]}."""
+    guardado, pedidos = {}, []
+    monkeypatch.setattr(simulador, "ESTADO_BUCKET", "teste")
+    monkeypatch.setattr(simulador, "ETL_SILVER_FUNCTION", "etl")
+    monkeypatch.setattr(simulador, "_gravar_json", lambda chave, dado: guardado.__setitem__(chave, dado))
+    monkeypatch.setattr(simulador, "_ler_json", lambda chave: guardado.get(chave, {}))
+
+    def etl(pedido):
+        pedidos.append(pedido)
+        return {"acoes": acoes or {}} if pedido["acao"] == "acoes_cenario" else {"viagens": 1}
+
+    monkeypatch.setattr(simulador, "_etl", etl)
+    return simulador.ligar_cenario(agora, 120), pedidos
+
+
+def _serie(simulador, ctx, inicio, camera, minutos):
+    """Score e alerta de cada minuto do cenário."""
+    out = []
+    for k in range(minutos):
+        ts = inicio + timedelta(minutes=k)
+        dado, alerta = simulador.leitura(ts, camera, random.Random(k), cenario=ctx)
+        out.append((k, dado["score_fadiga"] if dado else None, alerta["gravidade"] if alerta and alerta["tipo"] != "distracao" else None))
+    return out
+
+
+def test_cenario_leva_os_motoristas_ao_risco_e_alerta(monkeypatch):
+    simulador = carregar_lambda("simulador")
+    monkeypatch.setattr(simulador, "CAMERAS", 40)
+    agora = datetime(2026, 10, 21, 20, 0, tzinfo=FUSO)
+    cenario, pedidos = _cenario(monkeypatch, simulador, agora)
+    papeis = [m["papel"] for m in cenario["motoristas"]]
+    assert papeis == ["critico", "alto", "fadiga"]
+    # Os escolhidos são os que dirigem há mais tempo, com turno para a janela.
+    horas = [(agora - simulador.turno_atual(m["camera"], agora)["inicio"]).total_seconds() for m in cenario["motoristas"]]
+    assert horas == sorted(horas, reverse=True)
+    # A câmera da demonstração ao vivo ganha a viagem do dia.
+    assert pedidos[0]["acao"] == "planejar_viagens" and pedidos[0]["turnos"][0]["device"] == simulador.DEMO_DEVICE_ID
+
+    ao_vivo = simulador.cenario_ao_vivo(agora)
+    critico = next(m for m in cenario["motoristas"] if m["papel"] == "critico")
+    serie = [x for x in _serie(simulador, ao_vivo[critico["camera"]], agora, critico["camera"], 40) if x[1] is not None]
+    assert max(s for _, s, _ in serie) >= 88
+    alertas = [k for k, _, a in serie if a]
+    assert alertas and alertas[0] <= 8  # cruza 70 em poucos minutos
+    assert all(b - a >= 10 for a, b in zip(alertas, alertas[1:]))  # repete a cada 10 min, não a cada minuto
+    fadiga = next(m for m in cenario["motoristas"] if m["papel"] == "fadiga")
+    assert not any(a for _, _, a in _serie(simulador, ao_vivo[fadiga["camera"]], agora, fadiga["camera"], 40))
+
+
+def test_cenario_reage_a_resposta_da_central(monkeypatch):
+    simulador = carregar_lambda("simulador")
+    monkeypatch.setattr(simulador, "CAMERAS", 40)
+    agora = datetime(2026, 10, 21, 20, 0, tzinfo=FUSO)
+    cenario, _ = _cenario(monkeypatch, simulador, agora)
+    critico, alto = cenario["motoristas"][0]["camera"], cenario["motoristas"][1]["camera"]
+    parada = agora + timedelta(minutes=15)
+    acoes = {
+        f"dg-edge-{critico:04d}": [{"tipo": "pausa_obrigatoria", "detalhe": "30 min", "em": simulador._iso(parada)}],
+        f"dg-edge-{alto:04d}": [{"tipo": "encerramento_turno", "detalhe": None, "em": simulador._iso(parada)}],
+    }
+    _cenario(monkeypatch, simulador, agora, acoes)  # mesmo cenário, agora com as ações
+    ao_vivo = simulador.cenario_ao_vivo(agora + timedelta(minutes=16))
+    serie = dict((k, s) for k, s, _ in _serie(simulador, ao_vivo[critico], agora, critico, 60))
+    # Mandou parar: o score cai para o descanso e não há alerta enquanto ele descansa.
+    assert serie[14] is not None and serie[14] >= 75
+    assert serie[20] is not None and serie[20] < 30
+    # Parar de dirigir hoje: a câmera para em 5 minutos.
+    fim = dict((k, s) for k, s, _ in _serie(simulador, ao_vivo[alto], agora, alto, 30))
+    assert fim[16] is not None and fim[22] is None

@@ -283,7 +283,7 @@ def gravidade(s: float) -> str:
     return "critica" if s >= 90 else "alta" if s >= 80 else "media"
 
 
-def leitura(ts: datetime, camera: int, rng: random.Random, passo_min: int = 1) -> tuple[dict | None, dict | None]:
+def leitura(ts: datetime, camera: int, rng: random.Random, passo_min: int = 1, cenario: dict | None = None) -> tuple[dict | None, dict | None]:
     """
     Leitura da câmera no instante ts e o alerta que ela dispara, se houver.
     (None, None) quando o motorista não está dirigindo (fora do turno ou na
@@ -292,8 +292,10 @@ def leitura(ts: datetime, camera: int, rng: random.Random, passo_min: int = 1) -
     Alerta de sonolência: no máximo um a cada 20 minutos por câmera, num
     minuto que depende da câmera. Com `passo_min` > 1 (preenchimento), a
     regra vale por bloco de leituras, para continuar um a cada 20 minutos.
+    Com `cenario` (motorista do cenário da apresentação), o score e o alerta
+    seguem score_cenario e alerta_no_cenario.
     """
-    s = score(ts, camera, rng)
+    s = score_cenario(ts, camera, rng, cenario) if cenario else score(ts, camera, rng)
     if s is None:
         return None, None
     v = s / 100
@@ -317,7 +319,8 @@ def leitura(ts: datetime, camera: int, rng: random.Random, passo_min: int = 1) -
     minuto = int(ts.timestamp() // 60)
     blocos = max(1, 20 // passo_min)
     alerta = None
-    if s >= 70 and (minuto // passo_min) % blocos == camera % blocos:
+    dispara = alerta_no_cenario(ts, cenario, s) if cenario else (minuto // passo_min) % blocos == camera % blocos
+    if s >= 70 and dispara:
         tipo = "microssono" if olhos_ms >= 1000 else "cabeca_baixa" if pitch <= -15 else "bocejo_excessivo" if bocejo else "sonolencia"
         alerta = {
             "disparado_em": _iso(ts),
@@ -350,13 +353,13 @@ def _envelope(camera: int, enviado_em: datetime) -> dict:
     }
 
 
-def montar_lote(agora: datetime, camera: int, rng: random.Random) -> dict | None:
+def montar_lote(agora: datetime, camera: int, rng: random.Random, cenario: dict | None = None) -> dict | None:
     """Lote do último minuto da câmera, ou None se o motorista não está dirigindo."""
     passo = 60 / LEITURAS_POR_LOTE
     lote = _envelope(camera, agora)
     for i in range(LEITURAS_POR_LOTE):
         ts = agora - timedelta(seconds=60 - (i + 1) * passo)
-        dado, alerta = leitura(ts, camera, rng)
+        dado, alerta = leitura(ts, camera, rng, cenario=cenario)
         if dado:
             lote["leituras"].append(dado)
         if alerta:
@@ -573,6 +576,150 @@ def regenerar_periodo(agora: datetime, de: str, ate: str) -> dict:
     return {"apagado": apagado, **preencher_lacunas(agora, forcar=True, dias=max(dias, DIAS_CHECAGEM_PERIODICA))}
 
 
+# ---------------------------------------------------------------------------
+# Cenário da apresentação
+#
+# {"cenario": {"acao": "ligar", "minutos": 120}} escolhe os 3 motoristas que
+# estão dirigindo há mais tempo e, durante a janela, leva a fadiga deles a um
+# alvo, aos poucos: um a crítico (~12 min), um a alto (~25 min) e um só a
+# fadiga, sem alerta. O alerta sai quando o score cruza 70 e se repete a cada
+# 10 minutos enquanto ele seguir alto. A resposta da central na dashboard
+# muda o motorista simulado: mandar parar faz o score cair (ele descansa pelo
+# tempo escolhido); falar com ele baixa o score por 15 min, mas ele volta a
+# subir; parar de dirigir hoje ou outro motorista assumir encerram o envio.
+# Também planeja a viagem da câmera da demonstração ao vivo (DEMO_DEVICE_ID).
+# ---------------------------------------------------------------------------
+
+CENARIO_CHAVE = "simulador/cenario.json"
+CENARIO_BASE = 35.0
+CENARIO_PAPEIS = [
+    {"papel": "critico", "alvo": 93.0, "rampa_min": 12},
+    {"papel": "alto", "alvo": 81.0, "rampa_min": 25},
+    {"papel": "fadiga", "alvo": 62.0, "rampa_min": 20},
+]
+CENARIO_REPETE_ALERTA_MIN = 10
+DEMO_DEVICE_ID = os.environ.get("DEMO_DEVICE_ID", "dg-demo-caetano")
+DEMO_ROTA = os.environ.get("DEMO_ROTA", "Via Dutra")
+# Minutos de descanso por opção de "Mandar parar e descansar".
+DURACAO_PAUSA_MIN = {"15 min": 15, "30 min": 30, "1 h": 60, "até o próximo posto": 20}
+
+
+def _ler_json(chave: str) -> dict:
+    if not ESTADO_BUCKET:
+        return {}
+    import boto3
+
+    try:
+        obj = boto3.client("s3").get_object(Bucket=ESTADO_BUCKET, Key=chave)
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return {}
+
+
+def _gravar_json(chave: str, dado: dict) -> None:
+    if not ESTADO_BUCKET:
+        return
+    import boto3
+
+    boto3.client("s3").put_object(Bucket=ESTADO_BUCKET, Key=chave, Body=json.dumps(dado).encode("utf-8"), ContentType="application/json")
+
+
+def ligar_cenario(agora: datetime, minutos: int = 120) -> dict:
+    """Escolhe os motoristas do cenário (os que dirigem há mais tempo, com turno para a janela)."""
+    candidatos = []
+    for camera in range(1, CAMERAS + 1):
+        t = turno_atual(camera, agora)
+        if not t or horas_sem_pausa(t, agora) is None or (t["fim"] - agora).total_seconds() < 45 * 60:
+            continue
+        candidatos.append(((agora - t["inicio"]).total_seconds(), camera))
+    escolhidos = [c for _, c in sorted(candidatos, reverse=True)[: len(CENARIO_PAPEIS)]]
+    cenario = {
+        "inicio": _iso(agora),
+        "fim": _iso(agora + timedelta(minutes=max(10, min(int(minutos), 480)))),
+        "motoristas": [{"camera": c, **papel} for c, papel in zip(escolhidos, CENARIO_PAPEIS)],
+    }
+    _gravar_json(CENARIO_CHAVE, cenario)
+    # A câmera da demonstração ao vivo ganha a viagem do dia (é dela que vem a rota do turno).
+    if ETL_SILVER_FUNCTION:
+        try:
+            _etl({"acao": "planejar_viagens", "turnos": [{
+                "device": DEMO_DEVICE_ID, "inicio": _iso(agora - timedelta(minutes=30)),
+                "fim": _iso(agora + timedelta(hours=8)), "rota": DEMO_ROTA,
+            }]})
+        except Exception:
+            logger.exception("Não deu para planejar a viagem da câmera da demonstração")
+    return cenario
+
+
+def _efeitos_da_central(cenario: dict) -> dict:
+    """O que a central fez com cada motorista do cenário (pelas ações registradas na dashboard)."""
+    if not ETL_SILVER_FUNCTION or not cenario.get("motoristas"):
+        return {}
+    devices = [f"dg-edge-{m['camera']:04d}" for m in cenario["motoristas"]]
+    acoes = _etl({"acao": "acoes_cenario", "devices": devices, "desde": cenario["inicio"]})["acoes"]
+    efeitos = {}
+    for m in cenario["motoristas"]:
+        e = {}
+        for a in acoes.get(f"dg-edge-{m['camera']:04d}", []):
+            em = _parse(a["em"])
+            if a["tipo"] in ("encerramento_turno", "troca_motorista"):
+                e["encerrado_em"] = min(em, e.get("encerrado_em", em))
+            elif a["tipo"] == "pausa_obrigatoria":
+                e["pausa_em"] = max(em, e.get("pausa_em", em))
+                e["pausa_min"] = DURACAO_PAUSA_MIN.get(a.get("detalhe") or "", 30)
+            elif a["tipo"] == "contato_telefonico":
+                e["contato_em"] = max(em, e.get("contato_em", em))
+        efeitos[m["camera"]] = e
+    return efeitos
+
+
+def cenario_ao_vivo(agora: datetime) -> dict:
+    """{camera: contexto} dos motoristas do cenário, se ele está ligado agora."""
+    cenario = _ler_json(CENARIO_CHAVE)
+    if not cenario.get("fim") or not (_parse(cenario["inicio"]) <= agora < _parse(cenario["fim"])):
+        return {}
+    try:
+        efeitos = _efeitos_da_central(cenario)
+    except Exception:
+        logger.exception("Sem as ações da central para o cenário; segue sem elas")
+        efeitos = {}
+    inicio = _parse(cenario["inicio"])
+    return {m["camera"]: {**m, "inicio": inicio, "efeito": efeitos.get(m["camera"], {})} for m in cenario["motoristas"]}
+
+
+def score_cenario(ts: datetime, camera: int, rng: random.Random, ctx: dict) -> float | None:
+    """Score do motorista do cenário: o do modelo, puxado para o alvo e mudado pela resposta da central."""
+    base = score(ts, camera, rng)
+    if base is None:
+        return None
+    e = ctx["efeito"]
+    descanso = 20.0 + rng.gauss(0, 1.5)
+    if "encerrado_em" in e and ts >= e["encerrado_em"]:
+        # Estaciona: o score cai em 2 min e, 5 min depois, a câmera para.
+        minutos = (ts - e["encerrado_em"]).total_seconds() / 60
+        return None if minutos >= 5 else round(max(descanso, 80 - 30 * minutos), 2)
+    if "pausa_em" in e and ts >= e["pausa_em"]:
+        minutos = (ts - e["pausa_em"]).total_seconds() / 60
+        if minutos < e["pausa_min"]:
+            return round(max(descanso, 85 - 25 * minutos), 2)  # parado, descansando
+        return base  # voltou descansado: fim do papel no cenário
+    t_min = max(0.0, (ts - ctx["inicio"]).total_seconds() / 60)
+    rampa = CENARIO_BASE + (ctx["alvo"] - CENARIO_BASE) * min(1.0, t_min / ctx["rampa_min"])
+    s = max(base, rampa + 2.0 * math.sin(t_min / 3 + camera) + rng.gauss(0, 1.0))
+    if "contato_em" in e and e["contato_em"] <= ts < e["contato_em"] + timedelta(minutes=15):
+        s -= 15  # a conversa acorda, por um tempo
+    return round(min(99.0, max(1.0, s)), 2)
+
+
+def alerta_no_cenario(ts: datetime, ctx: dict, s: float) -> bool:
+    """Alerta quando o score cruza 70 e, depois, a cada 10 min enquanto ele seguir alto."""
+    if s < 70 or ctx["alvo"] < 70:
+        return False
+    cruza = math.ceil(ctx["rampa_min"] * (70 - CENARIO_BASE) / (ctx["alvo"] - CENARIO_BASE))
+    k = int((ts - ctx["inicio"]).total_seconds() // 60)
+    return k >= cruza and (k - cruza) % CENARIO_REPETE_ALERTA_MIN == 0
+
+
 def handler(event, context):
     if not INGEST_URL or not API_KEY:
         raise RuntimeError("INGEST_URL e API_KEY precisam estar configurados")
@@ -581,9 +728,18 @@ def handler(event, context):
     # Semente por minuto: reexecutar o mesmo minuto gera o mesmo lote, e a
     # constraint (device_id, registrado_em) descarta a duplicata.
     rng = random.Random(math.floor(agora.timestamp() / 60))
+    resultado = {}
+    pedido_cenario = event.get("cenario") if isinstance(event, dict) else None
+    if pedido_cenario:
+        if pedido_cenario.get("acao") == "desligar":
+            _gravar_json(CENARIO_CHAVE, {})
+            resultado["cenario"] = "desligado"
+        else:
+            resultado["cenario"] = ligar_cenario(agora, int(pedido_cenario.get("minutos") or 120))
+    cenario = cenario_ao_vivo(agora)
     enviados, fora_do_turno, falhas = 0, 0, []
     for camera in range(1, CAMERAS + 1):
-        lote = montar_lote(agora.replace(second=0, microsecond=0), camera, rng)
+        lote = montar_lote(agora.replace(second=0, microsecond=0), camera, rng, cenario.get(camera))
         if lote is None:
             fora_do_turno += 1
             continue
@@ -594,7 +750,7 @@ def handler(event, context):
             falhas.append({"camera": camera, "erro": str(exc)[:200]})
 
     logger.info("Lotes enviados: %d, fora do turno: %d, falhas: %s", enviados, fora_do_turno, falhas)
-    resultado = {"enviados": enviados, "fora_do_turno": fora_do_turno, "falhas": falhas}
+    resultado.update({"enviados": enviados, "fora_do_turno": fora_do_turno, "falhas": falhas})
 
     # Depois do ao vivo (que não pode atrasar): regenerar dias, lacunas
     # quando pedido, ou a checagem de 15 em 15 minutos.

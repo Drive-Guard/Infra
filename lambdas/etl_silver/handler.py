@@ -962,6 +962,34 @@ def simular_central(conn, ate: str) -> dict:
     return {"turnos_fechados": fechados, "alertas_resolvidos": alertas, "acoes": acoes}
 
 
+def acoes_cenario(conn, devices: list[str], desde: str) -> dict:
+    """
+    Ações da central (registradas por alguém na dashboard) desde `desde` nos
+    turnos das câmeras: o cenário da apresentação do simulador reage a elas.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT t.device_id, a.tipo::text, a.detalhe, a.realizado_em
+              FROM silver.acoes_motorista a
+              JOIN silver.turnos t ON t.id = a.turno_id
+             WHERE t.device_id = ANY(%s) AND a.realizado_em >= %s AND a.realizado_por IS NOT NULL
+               AND a.tipo IN ('pausa_obrigatoria', 'contato_telefonico', 'encerramento_turno', 'troca_motorista')
+             ORDER BY a.realizado_em
+            """,
+            ([normalizar_dispositivo(d) for d in devices], desde),
+        )
+        linhas = cur.fetchall()
+        conn.rollback()
+    finally:
+        cur.close()
+    acoes: dict = {}
+    for device, tipo, detalhe, em in linhas:
+        acoes.setdefault(device, []).append({"tipo": tipo, "detalhe": detalhe, "em": em.isoformat()})
+    return acoes
+
+
 def limpar_periodo(conn, de: str, ate: str) -> dict:
     """
     Apaga tudo o que aconteceu nos dias [de, ate] (datas de Brasília) nas
@@ -1027,6 +1055,8 @@ def _acao(event):
         return {"viagens": planejar_viagens(conn, list(event.get("turnos") or []))}
     if acao == "limpar":
         return {"limpo": limpar(conn, list(event.get("intervalos") or []))}
+    if acao == "acoes_cenario":
+        return {"acoes": acoes_cenario(conn, list(event.get("devices") or []), event["desde"])}
     if acao == "simular_central":
         return {"central": simular_central(conn, event["ate"])}
     if acao == "limpar_periodo":

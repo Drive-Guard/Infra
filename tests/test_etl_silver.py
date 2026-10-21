@@ -403,3 +403,28 @@ def test_central_simulada_responde_o_historico(conn, enviar, etl):
     acoes = um(conn, "SELECT count(*) FROM silver.acoes_motorista")[0]
     etl.handler({"acao": "simular_central", "ate": iso(BASE + timedelta(days=2))}, None)
     assert um(conn, "SELECT count(*) FROM silver.acoes_motorista")[0] == acoes
+
+
+def test_acoes_do_cenario_so_as_da_central(conn, enviar, etl):
+    enviar(lote("dg-edge-0003", "DRV-1002", BASE))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO silver.empresas (cnpj_hash, razao_social) VALUES ('cnpj-cen', 'Cenario') RETURNING id")
+    empresa = cur.fetchone()[0]
+    cur.execute("INSERT INTO silver.usuarios (empresa_id, email_hash, nome, papel) VALUES (%s, 'hash-cen', 'Central', 'operador') RETURNING id", (empresa,))
+    usuario = cur.fetchone()[0]
+    cur.execute(
+        """INSERT INTO silver.acoes_motorista (motorista_id, turno_id, tipo, detalhe, realizado_por, realizado_em)
+           SELECT motorista_id, id, 'pausa_obrigatoria', '30 min', %s, %s FROM silver.turnos""",
+        (usuario, BASE + timedelta(minutes=5)),
+    )
+    # A da simulação (sem autor) não conta.
+    cur.execute(
+        """INSERT INTO silver.acoes_motorista (motorista_id, turno_id, tipo, realizado_em)
+           SELECT motorista_id, id, 'contato_telefonico', %s FROM silver.turnos""",
+        (BASE + timedelta(minutes=6),),
+    )
+    conn.commit()
+    cur.close()
+    r = etl.handler({"acao": "acoes_cenario", "devices": ["dg-edge-0003"], "desde": iso(BASE)}, None)["acoes"]
+    assert [a["tipo"] for a in r["dg-edge-0003"]] == ["pausa_obrigatoria"]
+    assert r["dg-edge-0003"][0]["detalhe"] == "30 min"

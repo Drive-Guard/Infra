@@ -15,6 +15,12 @@
     ficaram pela metade (lab desligado): a dashboard já abre com o dia
     completo e os motoristas ao vivo com as horas anteriores do turno.
 
+    -Cenario (com -Minutos, padrão 120) liga o cenário da apresentação: os
+    3 motoristas que dirigem há mais tempo vão aos poucos para crítico, alto e
+    fadiga, com alertas para a central responder; a resposta muda o motorista
+    (mandar parar faz o score cair). Ligue uns 10 minutos antes de mostrar.
+    -CenarioDesligar volta tudo ao normal.
+
     -Regenerar AAAA-MM-DD (e -Ate AAAA-MM-DD) apaga esses dias (leituras,
     alertas, turnos, ações da central, ocorrências e viagens; cadastros
     ficam) e gera de novo pela escala.
@@ -28,6 +34,8 @@
     ./scripts/dados_ao_vivo.ps1 -Ligar
     ./scripts/dados_ao_vivo.ps1 -Desligar
     ./scripts/dados_ao_vivo.ps1 -Regenerar 2026-10-20
+    ./scripts/dados_ao_vivo.ps1 -Cenario -Minutos 120
+    ./scripts/dados_ao_vivo.ps1 -CenarioDesligar
     ./scripts/dados_ao_vivo.ps1 -Regenerar 2026-10-18 -Ate 2026-10-20
 #>
 
@@ -37,6 +45,9 @@ param(
     [Parameter(ParameterSetName = "Desligar")][switch]$Desligar,
     [Parameter(ParameterSetName = "Regenerar")][ValidatePattern('^\d{4}-\d{2}-\d{2}$')][string]$Regenerar,
     [Parameter(ParameterSetName = "Regenerar")][ValidatePattern('^\d{4}-\d{2}-\d{2}$')][string]$Ate,
+    [Parameter(ParameterSetName = "Cenario")][switch]$Cenario,
+    [Parameter(ParameterSetName = "Cenario")][ValidateRange(10, 480)][int]$Minutos = 120,
+    [Parameter(ParameterSetName = "CenarioDesligar")][switch]$CenarioDesligar,
     [string]$Regiao = "us-east-1",
     [string]$Prefixo = "driveguard-dev"
 )
@@ -65,6 +76,22 @@ if ($Ligar) {
     $ErrorActionPreference = $anterior
     if ($LASTEXITCODE) { Write-Host "Aviso: não consegui pedir o preenchimento agora; ele roda sozinho em até 15 min." -ForegroundColor Yellow }
     else { Write-Host "Preenchendo as lacunas até agora (alguns minutos; a dashboard atualiza sozinha)." -ForegroundColor Cyan }
+} elseif ($Cenario -or $CenarioDesligar) {
+    $acao = if ($CenarioDesligar) { "desligar" } else { "ligar" }
+    $evento = Join-Path $env:TEMP "driveguard-cenario.json"
+    [IO.File]::WriteAllText($evento, "{""cenario"": {""acao"": ""$acao"", ""minutos"": $Minutos}}")
+    $saida = Join-Path $env:TEMP "driveguard-cenario-saida.json"
+    aws lambda invoke --region $Regiao --function-name $regra --cli-read-timeout 300 --payload "fileb://$evento" $saida | Out-Null
+    if ($LASTEXITCODE) { throw "Falha ao chamar o simulador" }
+    $r = Get-Content $saida -Raw | ConvertFrom-Json
+    if ($r.errorMessage) { throw "O simulador falhou: $($r.errorMessage)" }
+    if ($CenarioDesligar) {
+        Write-Host "Cenário da apresentação desligado." -ForegroundColor Green
+    } else {
+        $fim = ([datetime]$r.cenario.fim).ToLocalTime().ToString("HH:mm")
+        Write-Host "Cenário da apresentação ligado até as $fim. Motoristas: $(($r.cenario.motoristas | ForEach-Object { 'DRV-' + (999 + $_.camera) + ' (' + $_.papel + ')' }) -join ', ')" -ForegroundColor Green
+        Write-Host "O primeiro alerta crítico sai em uns 6 minutos." -ForegroundColor Cyan
+    }
 } elseif ($Regenerar) {
     $fim = if ($Ate) { $Ate } else { $Regenerar }
     Write-Host "Apagando $Regenerar a $fim e gerando de novo (pode levar alguns minutos)..." -ForegroundColor Cyan
