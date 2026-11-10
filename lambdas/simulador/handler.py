@@ -720,9 +720,34 @@ def alerta_no_cenario(ts: datetime, ctx: dict, s: float) -> bool:
     return k >= cruza and (k - cruza) % CENARIO_REPETE_ALERTA_MIN == 0
 
 
+DB_INSTANCE_ID = os.environ.get("DB_INSTANCE_ID", "")
+
+
+def banco_disponivel() -> bool:
+    """
+    O RDS está ligado? No fim da sessão do Learner Lab o banco para, mas o
+    EventBridge segue chamando o simulador a cada minuto: sem esta checagem,
+    cada lote acionava o ETL contra um banco parado (o que estourou o
+    crédito de um lab). Sem DB_INSTANCE_ID (testes), considera ligado.
+    """
+    if not DB_INSTANCE_ID:
+        return True
+    import boto3
+
+    try:
+        r = boto3.client("rds").describe_db_instances(DBInstanceIdentifier=DB_INSTANCE_ID)
+        return r["DBInstances"][0]["DBInstanceStatus"] == "available"
+    except Exception:
+        logger.exception("Não deu para ver o estado do banco; segue como ligado")
+        return True
+
+
 def handler(event, context):
     if not INGEST_URL or not API_KEY:
         raise RuntimeError("INGEST_URL e API_KEY precisam estar configurados")
+    if not banco_disponivel():
+        logger.info("Banco parado: nada enviado (o preenchimento completa a lacuna quando ele voltar)")
+        return {"pausado": "banco indisponível"}
 
     agora = datetime.now(timezone.utc)
     # Semente por minuto: reexecutar o mesmo minuto gera o mesmo lote, e a

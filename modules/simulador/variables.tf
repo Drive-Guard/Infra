@@ -62,3 +62,9 @@ variable "preencher_max_dias" {
   type        = number
   default     = 30
 }
+
+variable "db_instance_id" {
+  description = "Identificador do RDS: com o banco parado (fim da sessão do lab), o simulador não envia nada."
+  type        = string
+  default     = ""
+}

@@ -54,3 +54,8 @@ output "ssm_uri_parameter" {
   description = "Caminho no SSM Parameter Store com a URI de conexão."
   value       = aws_ssm_parameter.db_uri.name
 }
+
+output "identifier" {
+  description = "Nome da instância RDS (o DBInstanceIdentifier das APIs)."
+  value       = aws_db_instance.this.identifier
+}

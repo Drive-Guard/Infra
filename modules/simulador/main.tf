@@ -57,6 +57,7 @@ resource "aws_lambda_function" "simulador" {
       ETL_SILVER_FUNCTION = var.etl_silver_function
       ESTADO_BUCKET       = var.estado_bucket
       PREENCHER_MAX_DIAS  = tostring(var.preencher_max_dias)
+      DB_INSTANCE_ID      = var.db_instance_id
     }
   }
 

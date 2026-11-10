@@ -10,6 +10,7 @@ A conexão é criada uma vez por container e reaproveitada entre invocações.
 """
 
 import os
+import socket
 import time
 import ssl
 import logging
@@ -49,7 +50,22 @@ def _ssl_context() -> ssl.SSLContext:
     return ctx
 
 
+def _banco_responde() -> None:
+    """
+    Teste rápido de TCP antes de abrir a sessão. O timeout do pg8000 vale
+    também para cada leitura (ver o db_migrate) e por isso é longo; com o RDS
+    parado (fim da sessão do Learner Lab), a Lambda ficava esperando até o
+    limite dela em toda execução, e isso custa. Aqui falha em segundos.
+    """
+    host, porta = os.environ["DB_HOST"], int(os.environ.get("DB_PORT", "5432"))
+    try:
+        socket.create_connection((host, porta), timeout=float(os.environ.get("DB_PROBE_TIMEOUT", "5"))).close()
+    except OSError as exc:
+        raise RuntimeError(f"Banco indisponível em {host}:{porta} (RDS parado?): {exc}") from exc
+
+
 def _conectar():
+    _banco_responde()
     return pg8000.dbapi.connect(
         host=os.environ["DB_HOST"],
         port=int(os.environ.get("DB_PORT", "5432")),

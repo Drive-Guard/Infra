@@ -308,6 +308,7 @@ module "simulador" {
   cameras             = var.simulador_cameras
   etl_silver_function = module.etl.etl_silver_function_name
   estado_bucket       = module.storage.artifacts_bucket_id
+  db_instance_id      = module.database.identifier
   ativo               = var.dados_ao_vivo
   log_retention_days  = var.lambda_log_retention_days
 

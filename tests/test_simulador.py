@@ -287,3 +287,14 @@ def test_cenario_reage_a_resposta_da_central(monkeypatch):
     # Parar de dirigir hoje: a câmera para em 5 minutos.
     fim = dict((k, s) for k, s, _ in _serie(simulador, ao_vivo[alto], agora, alto, 30))
     assert fim[16] is not None and fim[22] is None
+
+
+def test_banco_parado_nao_envia_nada(monkeypatch):
+    simulador = carregar_lambda("simulador")
+    monkeypatch.setattr(simulador, "INGEST_URL", "https://teste")
+    monkeypatch.setattr(simulador, "API_KEY", "chave")
+    monkeypatch.setattr(simulador, "banco_disponivel", lambda: False)
+    enviados = []
+    monkeypatch.setattr(simulador, "enviar", lambda lote: enviados.append(lote) or 202)
+    assert simulador.handler({}, None) == {"pausado": "banco indisponível"}
+    assert enviados == []
