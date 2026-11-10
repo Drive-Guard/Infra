@@ -1,3 +1,4 @@
 # Driver PostgreSQL 100% Python puro: instalavel com pip --target em
 # qualquer SO, sem toolchain de compilacao. Ver lambdas/common/db.py.
 pg8000==1.31.2
+scramp==1.4.5  # a 1.5 removeu make_channel_binding, que o pg8000 1.31 usa
